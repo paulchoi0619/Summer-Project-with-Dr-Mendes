@@ -1,0 +1,38 @@
+[package]
+name = "libp2p"
+edition = "2021"
+rust-version = "1.56.1"
+description = "Peer-to-peer networking library"
+version = "0.45.1"
+authors = ["Parity Technologies <admin@parity.io>"]
+license = "MIT"
+repository = "https://github.com/libp2p/rust-libp2p"
+keywords = ["peer-to-peer", "libp2p", "networking"]
+categories = ["network-programming", "asynchronous"]
+
+
+[dependencies]
+serde = {version = "*", features = ["derive"]}
+serde_json = "*"
+proc-macro-error = "1"
+libp2p = {version = "0.44", features = ["serde","default"]}
+super ="*"
+multiaddr = { version = "0.14.0" }
+async-std = { version = "*", features = ["attributes"]}
+async-trait = "0.1"
+env_logger = "0.9.0"
+clap = {version = "3.2.5", features = ["derive"]}
+tokio = {version="1.17.0", features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread"]}
+bytes = "1"
+futures = "0.3.1"
+futures-timer = "3.0.2" # Explicit dependency to be used in `wasm-bindgen` feature
+getrandom = "0.2.3" # Explicit dependency to be used in `wasm-bindgen` feature
+instant = "0.1.11" # Explicit dependency to be used in `wasm-bindgen` feature
+lazy_static = "1.2"
+parking_lot = "0.12.0"
+pin-project = "1.0.0"
+rand = "0.7.3" # Explicit dependency to be used in `wasm-bindgen` feature
+smallvec = "1.6.1"
+multishot = "*"
+void = "*"
+bounded-vec = "*"
