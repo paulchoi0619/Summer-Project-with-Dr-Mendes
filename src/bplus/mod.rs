@@ -1,6 +1,5 @@
 
 use tokio;
-use tokio::io::AsyncBufReadExt;
 use libp2p::identity;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -63,12 +62,26 @@ pub fn contains_block(&mut self,block_id:BlockId) -> bool{
     self.block_map.contains_key(&block_id)
 }
 
+pub fn insert_child(&mut self, key:Key, child:BlockId) ->InsertResult{
+    let current_id = self.find(self.top_id,key);
+    let current_block = self.get_block(current_id);
+    current_block.add_child(key,child);
+    if current_block.keys.len() == SIZE{
+        let mut new_block = current_block.clone(); //create new block to split and update block map
+        let result = new_block.split_internal_block(&mut self.block_map);
+        return self.insert_on_parent(result.left,result.divider_key,result.right);
+    }
+    else{
+        return InsertResult::Complete;
+    }
+}
+
 pub fn insert(&mut self,leaf_id:BlockId,key:Key,entry:Entry)->InsertResult{
     let leaf = self.block_map.get_mut(&leaf_id).unwrap();
     leaf.add_entry(key, entry);
   
     if leaf.keys.len() ==SIZE{
-        let mut newleaf= leaf.clone(); //create a new leaf to split and update
+        let mut newleaf= leaf.clone(); //create a new leaf to split and update block map
         let result = newleaf.split_leaf_block(&mut self.block_map);
           
         return self.insert_on_parent(result.left,result.divider_key,result.right);
@@ -90,18 +103,18 @@ pub fn insert_on_parent(&mut self,left:BlockId,key:Key,right:BlockId)->InsertRes
        
         rightblock.parent = new_root.block_id; //update parent of right block
         leftblock.parent = new_root.block_id; //update parent of left block
-        let migrate_block = rightblock.clone();
         self.top_id = new_root.block_id;
         self.block_map.insert(new_root.block_id,new_root);// add new root to block map
         self.block_map.insert(rightblock.block_id,rightblock); // insert/update right block
         self.block_map.insert(leftblock.block_id,leftblock); // update left block
-        return InsertResult::Migrate(migrate_block);
+        return InsertResult::Complete;
     }
     else{
         rightblock.parent = leftblock.parent;
-        let migrate_block = rightblock.clone();
         if !self.block_map.contains_key(&leftblock.parent){
-            return InsertResult::InsertOnRemoteParent(leftblock.parent, migrate_block);
+            
+            return InsertResult::InsertOnRemoteParent(leftblock.parent,key,right);
+
         }
         let mut parent = self.block_map.get_mut(&leftblock.parent).unwrap().clone(); //retrieve parent block
         parent.add_child(key,right);  //add right block to the parent
@@ -113,7 +126,7 @@ pub fn insert_on_parent(&mut self,left:BlockId,key:Key,right:BlockId)->InsertRes
         }
         else{
             self.block_map.insert(parent.block_id,parent); // update parent in the map 
-            return InsertResult::Migrate(migrate_block)
+            return InsertResult::Complete;
         }
        
     
@@ -248,8 +261,7 @@ impl Block{
 
 pub enum InsertResult{
     Complete,
-    Migrate(Block),
-    InsertOnRemoteParent(BlockId,Block),
+    InsertOnRemoteParent(BlockId,Key,BlockId),
 }
 pub struct SplitResult{
     left: BlockId,

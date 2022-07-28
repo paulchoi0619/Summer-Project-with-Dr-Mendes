@@ -158,16 +158,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let result = bp_tree.insert(current_id,key,entry);
                                     match result{
                                         InsertResult::Complete =>{
-                                            network_client.respond_lease(current_id.to_string(),channel).await;
+                                            network_client.respond_lease(network_client_id.to_string(),channel).await;
                                         }
-                                        InsertResult::Migrate(Block) => {
-                                            let peers = network_client.get_closest_peer(top_id.to_string()).await;
-                                            let peer = peers[0];
-                                            let migrate = GeneralResponse::MigrateResponse(Block);
-                                            network_client.request(peer,migrate).await;
-                                        }
-                                        InsertResult::InsertOnRemoteParent(BlockId,Block) => {
-
+                                        InsertResult::InsertOnRemoteParent(parent,key,child) => {
+                                            let providers = network_client.get_providers(parent.to_string()).await;
+                                            if providers.is_empty() {
+                                                return Err("Could not find parent.".into());
+                                            }
+                                            let parent_call = GeneralResponse::InsertOnRemoteParent(key,child);
+                                            let requests = providers.into_iter().map(|p| {
+                                        
+                                                let mut network_client = network_client.clone();
+                                                let parent_call = parent_call.clone();
+                                                async move { network_client.request(p,parent_call).await }.boxed()
+                                            });
+                                            let insert_info = futures::future::select_ok(requests).await;
+                                            match insert_info{
+                                                Ok(str) => {
+                                                    println!("Here {:?}", str.0);
+                                                    network_client.respond_lease(str.0,channel).await;
+                                                },
+                                                Err(err) => {
+                                                println!("Here {:?}", err);
+                                                return Err("Could not find provider for lease.".into());
+                                                },
+                                            };
                                         }
                                     }
                                     
@@ -200,10 +215,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 }
                             }
                             GeneralResponse::MigrateResponse(Block)=>{
-
-                            }
-                            GeneralResponse::InsertOnRemoteParent(Block,BlockId) =>{
                                 
+                            }
+                            GeneralResponse::InsertOnRemoteParent(Key,BlockId) =>{
+                                let result  = bp_tree.insert_child(Key,BlockId);
+                                match result{
+                                    InsertResult::Complete =>{
+                                        network_client.respond_lease(network_client_id.to_string(),channel).await;
+                                    }
+                                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
+                                        let providers = network_client.get_providers(parent.to_string()).await;
+                                        if providers.is_empty() {
+                                            return Err("Could not find parent.".into());
+                                        }
+                                        let parent_call = GeneralResponse::InsertOnRemoteParent(key,child);
+                                        let requests = providers.into_iter().map(|p| {
+                                    
+                                            let mut network_client = network_client.clone();
+                                            let parent_call = parent_call.clone();
+                                            async move { network_client.request(p,parent_call).await }.boxed()
+                                        });
+                                        let insert_info = futures::future::select_ok(requests).await;
+                                        match insert_info{
+                                            Ok(str) => {
+                                                println!("Here {:?}", str.0);
+                                                network_client.respond_lease(str.0,channel).await;
+                                            },
+                                            Err(err) => {
+                                            println!("Here {:?}", err);
+                                            return Err("Could not find provider for lease.".into());
+                                            },
+                                        };
+                                    }
+                                }
+
+
                             }
                         }
 
@@ -250,7 +296,7 @@ struct Opt {
 pub enum GeneralResponse{
     LeaseResponse (Key,Entry),
     MigrateResponse(Block),
-    InsertOnRemoteParent(Block,BlockId),
+    InsertOnRemoteParent(Key,BlockId),
 }
 
 
