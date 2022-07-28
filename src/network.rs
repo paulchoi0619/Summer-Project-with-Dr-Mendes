@@ -149,7 +149,7 @@
             receiver.await.expect("Sender not to be dropped.")
         }
 
-        pub async fn request(&mut self, peer: PeerId,request:GeneralResponse) -> Result<String, Box<dyn Error + Send>> {
+        pub async fn request(&mut self, peer: PeerId,request:GeneralRequest) -> Result<String, Box<dyn Error + Send>> {
             let (sender, receiver) = oneshot::channel();
             self.sender
                 .send(Command::RequestLease {
@@ -162,17 +162,17 @@
             receiver.await.expect("Sender not be dropped.")
         }
 
-        pub async fn respond_lease(&mut self, response: String, channel: ResponseChannel<GenericResponse>) {
+        pub async fn respond(&mut self, response: PeerId, channel: ResponseChannel<GenericResponse>) {
             self.sender
-                .send(Command::RespondLease { response,  channel })
+                .send(Command::Respond { response,  channel })
                 .await
                 .expect("Command receiver not to be dropped.");
         }
 
-        pub async fn boot_root(&mut self) {
+        pub async fn boot_root(&mut self,id: PeerId) {
             let (sender, receiver) = oneshot::channel();
             self.sender
-                .send(Command::BootRoot { up_root: "root".to_string(), sender })
+                .send(Command::BootRoot { up_root: id.to_string(), sender })
                 .await
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.");
@@ -436,7 +436,8 @@
                         .send_request(&peer, GenericRequest(request));
                     self.pending_request.insert(request_id, sender);
                 }
-                Command::RespondLease {response, channel } => {
+                Command::Respond {response, channel } => {
+                let response = serde_json::to_string(&response).unwrap();
                 self.swarm
                     .behaviour_mut()
                     .request_response
@@ -516,11 +517,11 @@
         },
         RequestLease {
             peer: PeerId,
-            request: GeneralResponse,
+            request: GeneralRequest,
             sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
         },
-        RespondLease {
-            response: String,
+        Respond {
+            response: PeerId,
             channel: ResponseChannel<GenericResponse>,
         },
         BootRoot {

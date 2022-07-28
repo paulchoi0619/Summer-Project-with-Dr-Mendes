@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     block.set_block_id();
     let mut bp_tree = BPTree::new(block);
     if providers.is_empty() {
-    network_client.boot_root().await;
+    network_client.boot_root(network_client_id).await;
     } // to be found in the network with the specific name
     loop {
         tokio::select! { 
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         match input{
                                             Ok(key) =>{
                                                 let entry = Entry::new(network_client_id,key);
-                                                let lease = GeneralResponse::LeaseResponse(key,entry);
+                                                let lease = GeneralRequest::LeaseRequest(key,entry);
                                                
                                                 let providers = network_client.get_providers("root".to_string()).await;
 
@@ -113,8 +113,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     let lease = lease.clone();
                                                     async move { network_client.request(p,lease).await }.boxed()
                                                 });
-                                            
-                                            //println!("{:?}", requests);
                                             
                                             let lease_info = futures::future::select_ok(requests)
                                                 .await;
@@ -145,12 +143,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
             event = network_events.next() => match event {
                     None => {
-                        
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
-                        let response:GeneralResponse= serde_json::from_str(&request).unwrap();
+                        let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
-                            GeneralResponse::LeaseResponse(key,entry) => {
+                            GeneralRequest::LeaseRequest(key,entry) => {
                                 let top_id = bp_tree.get_top_id();
                                 let current_id = bp_tree.find(top_id,key);
                                 let current_block = bp_tree.get_block(current_id);
@@ -158,14 +155,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let result = bp_tree.insert(current_id,key,entry);
                                     match result{
                                         InsertResult::Complete =>{
-                                            network_client.respond_lease(network_client_id.to_string(),channel).await;
+                                            network_client.respond(network_client_id,channel).await;
                                         }
                                         InsertResult::InsertOnRemoteParent(parent,key,child) => {
                                             let providers = network_client.get_providers(parent.to_string()).await;
                                             if providers.is_empty() {
                                                 return Err("Could not find parent.".into());
                                             }
-                                            let parent_call = GeneralResponse::InsertOnRemoteParent(key,child);
+                                            let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
                                             let requests = providers.into_iter().map(|p| {
                                         
                                                 let mut network_client = network_client.clone();
@@ -176,7 +173,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             match insert_info{
                                                 Ok(str) => {
                                                     println!("Here {:?}", str.0);
-                                                    network_client.respond_lease(str.0,channel).await;
+                                                    
                                                 },
                                                 Err(err) => {
                                                 println!("Here {:?}", err);
@@ -193,7 +190,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     if providers.is_empty() {
                                         return Err("Could not find provider for lease.".into());
                                     }
-                                    let lease = GeneralResponse::LeaseResponse(key,entry);
+                                    let lease = GeneralRequest::LeaseRequest(key,entry);
                                     let requests = providers.into_iter().map(|p| {
                                         
                                         let mut network_client = network_client.clone();
@@ -204,7 +201,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     match lease_info{
                                         Ok(str) => {
                                             println!("Here {:?}", str.0);
-                                            network_client.respond_lease(str.0,channel).await;
+                                            
                                         },
                                         Err(err) => {
                                         println!("Here {:?}", err);
@@ -214,21 +211,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                                 }
                             }
-                            GeneralResponse::MigrateResponse(Block)=>{
-                                
+                            GeneralRequest::MigrateRequest(Block)=>{
+
                             }
-                            GeneralResponse::InsertOnRemoteParent(Key,BlockId) =>{
+                            GeneralRequest::InsertOnRemoteParent(Key,BlockId) =>{
                                 let result  = bp_tree.insert_child(Key,BlockId);
                                 match result{
                                     InsertResult::Complete =>{
-                                        network_client.respond_lease(network_client_id.to_string(),channel).await;
+                                        network_client.respond(network_client_id,channel).await;
                                     }
                                     InsertResult::InsertOnRemoteParent(parent,key,child) => {
                                         let providers = network_client.get_providers(parent.to_string()).await;
                                         if providers.is_empty() {
                                             return Err("Could not find parent.".into());
                                         }
-                                        let parent_call = GeneralResponse::InsertOnRemoteParent(key,child);
+                                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
                                         let requests = providers.into_iter().map(|p| {
                                     
                                             let mut network_client = network_client.clone();
@@ -239,7 +236,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         match insert_info{
                                             Ok(str) => {
                                                 println!("Here {:?}", str.0);
-                                                network_client.respond_lease(str.0,channel).await;
+                                               
                                             },
                                             Err(err) => {
                                             println!("Here {:?}", err);
@@ -293,9 +290,9 @@ struct Opt {
 
 
 #[derive(Debug,Serialize,Deserialize,Clone,Hash)]
-pub enum GeneralResponse{
-    LeaseResponse (Key,Entry),
-    MigrateResponse(Block),
+pub enum GeneralRequest{
+    LeaseRequest (Key,Entry),
+    MigrateRequest(Block),
     InsertOnRemoteParent(Key,BlockId),
 }
 
