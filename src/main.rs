@@ -6,12 +6,9 @@ use tokio::io::AsyncBufReadExt;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::multiaddr::Protocol;
-use std::cmp::Ordering;
 use std::error::Error;
-use std::f32::consts::E;
 use std::path::PathBuf;
 use serde_json;
-use std::collections::HashMap;
 
 use std::hash::{Hash, Hasher};
 use serde::{Serialize, Deserialize};
@@ -70,14 +67,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    let providers = network_client.get_providers("root".to_string()).await;
+    
 
     let mut block = Block::new();
     block.set_block_id();
     let mut bp_tree = BPTree::new(block);
-    if providers.is_empty() {
-    network_client.boot_root(network_client_id).await;
-    } // to be found in the network with the specific name
+    // to be found in the network with the specific name
     loop {
         tokio::select! { 
             line_option = stdin.next_line() => 
@@ -119,7 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         
                                             match lease_info{
                                                 Ok(str) => println!("Here {:?}", str.0),
-                                                Err(err) => println!("Here {:?}", err),
+                                                Err(err) => println!("Error {:?}", err),
                                             };
                                             }
                                             Err(_) =>{
@@ -135,8 +130,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                             
                         },
-                        
-                        _ => print!("unknown command\n"),
+                        cmd if cmd.starts_with("root") => {
+                            let providers = network_client.get_providers("root".to_string()).await;
+                            if providers.is_empty() {
+                                network_client.boot_root().await;
+                            } 
+                            else{
+                                println!("root already exists!")
+                            }
+                        },
+
+                        _ => println!("unknown command\n"),
                     }
                 },
                 Err(_) => print!("Error handing input line: "),
@@ -148,110 +152,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
                             GeneralRequest::LeaseRequest(key,entry) => {
-                                let top_id = bp_tree.get_top_id();
-                                let current_id = bp_tree.find(top_id,key);
-                                let current_block = bp_tree.get_block(current_id);
-                                if current_block.is_leaf(){
-                                    let result = bp_tree.insert(current_id,key,entry);
-                                    match result{
-                                        InsertResult::Complete =>{
-                                            network_client.respond(network_client_id,channel).await;
-                                        }
-                                        InsertResult::InsertOnRemoteParent(parent,key,child) => {
-                                            let providers = network_client.get_providers(parent.to_string()).await;
-                                            if providers.is_empty() {
-                                                return Err("Could not find parent.".into());
-                                            }
-                                            let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
-                                            let requests = providers.into_iter().map(|p| {
-                                        
-                                                let mut network_client = network_client.clone();
-                                                let parent_call = parent_call.clone();
-                                                async move { network_client.request(p,parent_call).await }.boxed()
-                                            });
-                                            let insert_info = futures::future::select_ok(requests).await;
-                                            match insert_info{
-                                                Ok(str) => {
-                                                    println!("Here {:?}", str.0);
-                                                    
-                                                },
-                                                Err(err) => {
-                                                println!("Here {:?}", err);
-                                                return Err("Could not find provider for lease.".into());
-                                                },
-                                            };
-                                        }
-                                    }
-                                    
-                                }
-                                else{
-                                    let providers = network_client.get_providers(current_id.to_string()).await;
-
-                                    if providers.is_empty() {
-                                        return Err("Could not find provider for lease.".into());
-                                    }
-                                    let lease = GeneralRequest::LeaseRequest(key,entry);
-                                    let requests = providers.into_iter().map(|p| {
-                                        
-                                        let mut network_client = network_client.clone();
-                                        let lease = lease.clone();
-                                        async move { network_client.request(p,lease).await }.boxed()
-                                    });
-                                    let lease_info = futures::future::select_ok(requests).await;
-                                    match lease_info{
-                                        Ok(str) => {
-                                            println!("Here {:?}", str.0);
-                                            
-                                        },
-                                        Err(err) => {
-                                        println!("Here {:?}", err);
-                                        return Err("Could not find provider for lease.".into());
-                                        },
-                                    };
-
-                                }
+                                network_client.handle_lease_request(key, entry, &mut bp_tree, channel).await;
                             }
                             GeneralRequest::MigrateRequest(Block)=>{
-
+                                
                             }
                             GeneralRequest::InsertOnRemoteParent(Key,BlockId) =>{
-                                let result  = bp_tree.insert_child(Key,BlockId);
-                                match result{
-                                    InsertResult::Complete =>{
-                                        network_client.respond(network_client_id,channel).await;
-                                    }
-                                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
-                                        let providers = network_client.get_providers(parent.to_string()).await;
-                                        if providers.is_empty() {
-                                            return Err("Could not find parent.".into());
-                                        }
-                                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
-                                        let requests = providers.into_iter().map(|p| {
-                                    
-                                            let mut network_client = network_client.clone();
-                                            let parent_call = parent_call.clone();
-                                            async move { network_client.request(p,parent_call).await }.boxed()
-                                        });
-                                        let insert_info = futures::future::select_ok(requests).await;
-                                        match insert_info{
-                                            Ok(str) => {
-                                                println!("Here {:?}", str.0);
-                                               
-                                            },
-                                            Err(err) => {
-                                            println!("Here {:?}", err);
-                                            return Err("Could not find provider for lease.".into());
-                                            },
-                                        };
-                                    }
-                                }
-
-
+                                network_client.handle_insert_on_remote_parent(Key, BlockId, &mut bp_tree, channel).await;
                             }
-                        }
-
-                        
-                       
+                        }                       
                         
                     }
                 },
@@ -260,6 +169,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+
+
+
+
+
 
 
 // internal node extra field: children

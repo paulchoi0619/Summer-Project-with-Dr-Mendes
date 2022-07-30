@@ -23,6 +23,10 @@
     use std::iter;
     use void;
     use serde_json;
+
+
+    use bplus::{BPTree,Block,SplitResult,Entry,Data,SIZE,InsertResult, BlockId};
+
     //use serde::{Serialize, Deserialize};
     /// Creates the network components, namely:
     ///
@@ -162,23 +166,115 @@
             receiver.await.expect("Sender not be dropped.")
         }
 
-        pub async fn respond(&mut self, response: PeerId, channel: ResponseChannel<GenericResponse>) {
+        pub async fn respond(&mut self, response: String, channel: ResponseChannel<GenericResponse>) {
             self.sender
                 .send(Command::Respond { response,  channel })
                 .await
                 .expect("Command receiver not to be dropped.");
         }
 
-        pub async fn boot_root(&mut self,id: PeerId) {
+        pub async fn boot_root(&mut self) {
             let (sender, receiver) = oneshot::channel();
             self.sender
-                .send(Command::BootRoot { up_root: id.to_string(), sender })
+                .send(Command::BootRoot { up_root: "root".to_string(), sender })
                 .await
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.");
         }
-    }
+        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+            let top_id = bp_tree.get_top_id();
+            let current_id = bp_tree.find(top_id,key);
+            let current_block = bp_tree.get_block(current_id);
+            if current_block.is_leaf(){
+                let result = bp_tree.insert(current_id,key,entry);
+                match result{
+                    InsertResult::Complete =>{
+                        self.respond("complete".to_string(),channel).await;
+                    }
+                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
+                        let providers = self.get_providers(parent.to_string()).await;
+                        if providers.is_empty() {
+                            println!("Could not find parent.");
+                        }
+                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
+                        let requests = providers.into_iter().map(|p| {
+                    
+                            let mut network_client = self.clone();
+                            let parent_call = parent_call.clone();
+                            async move { network_client.request(p,parent_call).await }.boxed()
+                        });
+                        let insert_info = futures::future::select_ok(requests).await;
+                        match insert_info{
+                            Ok(str) => {
+                                println!("Here {:?}", str.0);
+                                
+                            },
+                            Err(err) => {
+                            println!("Error {:?}", err);
+                            }
+                        };
+                    }
+                }
+                
+            }
+            else{
+                let providers = self.get_providers(current_id.to_string()).await;
 
+                if providers.is_empty() {
+                    println!("Could not find provider for lease.");
+                }
+                let lease = GeneralRequest::LeaseRequest(key,entry);
+                let requests = providers.into_iter().map(|p| {
+                    
+                    let mut network_client = self.clone();
+                    let lease = lease.clone();
+                    async move { network_client.request(p,lease).await }.boxed()
+                });
+                let lease_info = futures::future::select_ok(requests).await;
+                match lease_info{
+                    Ok(str) => {
+                        println!("Here {:?}", str.0);
+                        
+                    },
+                    Err(err) => {
+                    println!("Error {:?}", err);
+                    },
+                };
+        }
+    }
+    pub async fn handle_insert_on_remote_parent(&mut self, key:Key,child:BlockId,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+        let result  = bp_tree.insert_child(key,child);
+        match result{
+            InsertResult::Complete =>{
+                self.respond("Completed".to_string(),channel).await;
+            }
+            InsertResult::InsertOnRemoteParent(parent,key,child) => {
+                let providers = self.get_providers(parent.to_string()).await;
+                if providers.is_empty() {
+                    println!("Could not find parent.");
+                }
+                let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
+                let requests = providers.into_iter().map(|p| {
+            
+                    let mut network_client = self.clone();
+                    let parent_call = parent_call.clone();
+                    async move { network_client.request(p,parent_call).await }.boxed()
+                });
+                let insert_info = futures::future::select_ok(requests).await;
+                match insert_info{
+                    Ok(str) => {
+                        println!("Here {:?}", str.0);
+                        
+                    },
+                    Err(err) => {
+                    println!("Error {:?}", err);
+                    },
+                };
+            }
+                                }
+    }
+    
+    }
    
     pub struct EventLoop {
         swarm: Swarm<ComposedBehaviour>,
@@ -521,7 +617,7 @@
             sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
         },
         Respond {
-            response: PeerId,
+            response: String,
             channel: ResponseChannel<GenericResponse>,
         },
         BootRoot {

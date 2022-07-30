@@ -13,7 +13,8 @@ use rand::Rng;
 use futures::future::Either;
 pub struct BPTree{
     block_map: HashMap<Key,Block>,
-    top_id: BlockId
+    top_id: BlockId,
+   
 }
 impl BPTree{
 
@@ -95,14 +96,17 @@ pub fn insert_on_parent(&mut self,left:BlockId,key:Key,right:BlockId)->InsertRes
     if left== self.top_id{
         
         let mut new_root =  Block::new(); 
-        new_root.set_block_id();
+        new_root.block_id = left; // new root acquires left child's block id to streamline the process of finding the provider of this block
         self.top_id = new_root.block_id;
+       
         new_root.is_leaf=false;
+        
         new_root.children.push(left);
         new_root.add_child(key,right);
        
         rightblock.parent = new_root.block_id; //update parent of right block
         leftblock.parent = new_root.block_id; //update parent of left block
+        leftblock.set_block_id(); // assign new block id 
         self.top_id = new_root.block_id;
         self.block_map.insert(new_root.block_id,new_root);// add new root to block map
         self.block_map.insert(rightblock.block_id,rightblock); // insert/update right block
@@ -226,6 +230,7 @@ impl Block{
             leftblock.keys.pop();
             leftblock.values.pop();
         }
+
         result.divider_key = rightblock.keys[0];
         block_map.insert(rightblock.block_id,rightblock); //insert into map 
         block_map.insert(leftblock.block_id,leftblock); //update 
@@ -236,12 +241,14 @@ impl Block{
     // return 2 blocks
     pub fn split_internal_block(&mut self, block_map:&mut HashMap<u64,Block>) -> SplitResult{
         let mut result = SplitResult::new(self.block_id);
-        let mut leftblock = block_map.get(&result.left).unwrap().clone();
+        let mut leftblock = block_map.get(&self.block_id).unwrap().clone();
         let mut rightblock = Block::new();
+
         rightblock.set_block_id();
         result.right = rightblock.block_id;
         rightblock.parent = leftblock.parent;
         rightblock.is_leaf=false;
+
         let counter:usize = 1+SIZE/2;
         let length = leftblock.keys.len().clone();
         for i in counter..length{
