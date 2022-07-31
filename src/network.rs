@@ -6,7 +6,9 @@
     use futures::channel::{mpsc, oneshot};
     use libp2p::core::either::EitherError;
     use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
-    use libp2p::identity;
+    use libp2p::gossipsub::error::GossipsubHandlerError;
+    use libp2p::gossipsub::{GossipsubEvent, MessageAuthenticity, ValidationMode, IdentTopic as Topic, GossipsubMessage, MessageId};
+    use libp2p::{identity, gossipsub};
     use libp2p::identity::ed25519;
     use libp2p::kad::record::store::MemoryStore;
     use libp2p::kad::{GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,GetClosestPeersOk};
@@ -19,6 +21,8 @@
     use libp2p::swarm::{ConnectionHandlerUpgrErr, SwarmBuilder, SwarmEvent};
     use libp2p::{NetworkBehaviour, Swarm};
     use tokio::io;
+    use tokio::time::{sleep, Duration};
+    use std::collections::hash_map::DefaultHasher;
     use std::collections::{HashMap, HashSet};
     use std::iter;
     use void;
@@ -52,11 +56,23 @@
             None => identity::Keypair::generate_ed25519(),
         };
         let peer_id = id_keys.public().to_peer_id();
-
+        let message_id_fn = |message: &GossipsubMessage| {
+            let mut s = DefaultHasher::new();
+            message.data.hash(&mut s);
+            MessageId::from(s.finish().to_string())
+        };
+        
+        let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
+            .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
+            .validation_mode(ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
+            .message_id_fn(message_id_fn)
+            .build()
+            .expect("Valid config");
+            
         // Build the Swarm, connecting the lower layer transport logic with the
         // higher layer network behaviour logic.
         let swarm = SwarmBuilder::new(
-            libp2p::development_transport(id_keys).await?,
+            libp2p::development_transport(id_keys.clone()).await?,
             ComposedBehaviour {
                 kademlia: Kademlia::new(peer_id, MemoryStore::new(peer_id)),
                 request_response: RequestResponse::new(
@@ -65,6 +81,7 @@
                     Default::default(),
                 ),
                 mdns: Mdns::new(MdnsConfig::default()).await?,
+                gossipsub: gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys), gossipsub_config)?,
             },
             peer_id,
         )
@@ -190,6 +207,7 @@
                 match result{
                     InsertResult::Complete =>{
                         self.respond("complete".to_string(),channel).await;
+                        println!("{:?}",bp_tree.get_block_map());
                     }
                     InsertResult::InsertOnRemoteParent(parent,key,child) => {
                         let providers = self.get_providers(parent.to_string()).await;
@@ -273,7 +291,7 @@
             }
                                 }
     }
-    
+
     }
    
     pub struct EventLoop {
@@ -321,8 +339,8 @@
         async fn handle_event(
             &mut self,
             event: SwarmEvent<
-                ComposedEvent,
-                EitherError<EitherError<ConnectionHandlerUpgrErr<io::Error>, io::Error>,void::Void>,
+            ComposedEvent,
+            EitherError<EitherError<EitherError<ConnectionHandlerUpgrErr<io::Error>, io::Error>,void::Void>, GossipsubHandlerError>,
             >,
         ) {
             match event {
@@ -330,9 +348,14 @@
                     MdnsEvent::Discovered(discovered_list))) => {
                     for (peer, addr) in discovered_list {
                         self
-                        .swarm.behaviour_mut()
-                        .kademlia
-                        .add_address(&peer, addr);
+                            .swarm.behaviour_mut()
+                            .kademlia
+                            .add_address(&peer, addr);
+                        self
+                            .swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .add_explicit_peer(&peer);
                         println!("added: {:?}", peer);
                     }
                 }
@@ -341,14 +364,26 @@
                     for (peer, _addr) in expired_list {
                         if !self.swarm.behaviour_mut().mdns.has_node(&peer) {
                             self
-                            .swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .remove_peer(&peer);
+                                .swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .remove_peer(&peer);
+                            self
+                                .swarm
+                                .behaviour_mut()
+                                .gossipsub
+                                .remove_explicit_peer(&peer);
                         }
                     }
                 }
-               
+                SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Message {
+                    propagation_source: peer_id,
+                    message_id: id,
+                    message,
+                })) => {
+                    println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
+                    
+                }
                 SwarmEvent::Behaviour(ComposedEvent::Kademlia(KademliaEvent::OutboundQueryCompleted{
                      id, 
                      result:QueryResult::GetClosestPeers(Ok(GetClosestPeersOk {peers,.. })),
@@ -560,6 +595,7 @@
         request_response: RequestResponse<GenericExchangeCodec>,
         kademlia: Kademlia<MemoryStore>,
         mdns: Mdns,
+        gossipsub: gossipsub::Gossipsub,
     }
 
     #[derive(Debug)]
@@ -567,6 +603,7 @@
         RequestResponse(RequestResponseEvent<GenericRequest, GenericResponse>),
         Kademlia(KademliaEvent),
         Mdns(MdnsEvent),
+        Gossipsub(GossipsubEvent),
     }
 
     impl From<RequestResponseEvent<GenericRequest, GenericResponse>> for ComposedEvent {
@@ -586,7 +623,11 @@
             ComposedEvent::Mdns(event)
         }
     }
-
+    impl From<GossipsubEvent> for ComposedEvent {
+        fn from(event: GossipsubEvent) -> Self {
+            ComposedEvent::Gossipsub(event)
+        }
+    }
     //#[derive(Debug)]
    
     enum Command {

@@ -27,7 +27,9 @@ pub fn new (root:Block) -> Self{
     top_id: id
     }
 }
-
+pub fn get_block_map(&self) -> &HashMap<Key,Block>{
+    &self.block_map
+}
 pub fn get_top_id(&self) -> BlockId{
     self.top_id
 }
