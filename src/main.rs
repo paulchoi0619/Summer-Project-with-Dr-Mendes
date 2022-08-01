@@ -6,6 +6,7 @@ use tokio::io::AsyncBufReadExt;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::multiaddr::Protocol;
+use std::collections::{HashSet,HashMap};
 use std::error::Error;
 use std::path::PathBuf;
 use serde_json;
@@ -72,6 +73,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut block = Block::new();
     block.set_block_id();
     let mut bp_tree = BPTree::new(block);
+    let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
+    let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
     // to be found in the network with the specific name
     loop {
         tokio::select! { 
@@ -112,7 +115,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 .await;
                                         
                                             match lease_info{
-                                                Ok(str) => println!("Here {:?}", str.0),
+                                                Ok(str) => {
+                                                    let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
+                                                    println!("Here {:?}", response);
+                                                },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
                                             }
@@ -138,8 +144,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 println!("root already exists!")
                             }
                         },
-                        cmd if cmd.starts_with("size") => {
-                            
+                        cmd if cmd.starts_with("migrate") => {
+                            let right_block = bp_tree.get_right_block();
+                            if right_block!= 0{ //if it's not default blockid
+                                let peers = network_client.get_closest_peer(network_client_id).await;
+                                if peers.is_empty(){
+                                    return Err(format!("Could not find peer.").into());
+                                }
+                                let peer = peers[0];
+                                let block = bp_tree.get_block(right_block).clone();
+                                let request = GeneralRequest::MigrateRequest(block);
+                                block_migration.insert(right_block); //indicating that this block is in the process of migration
+                                let result = network_client.request(peer,request).await;
+                                match result{
+                                    Ok(str) => 
+                                    {println!("Here {:?}", str);
+                                    block_migration.remove(&right_block); //migration is complete
+                                    if commands.contains_key(&right_block){
+                                    let lease_commands = commands.remove(&right_block).unwrap().clone();
+                                    let lease_requests = GeneralRequest::LeaseRequests(lease_commands);
+                                    network_client.request(peer,lease_requests).await; //dumping all the commands 
+
+                                }
+                                },
+                                    Err(err) => println!("Error {:?}", err),
+                                }
+                            }
+                            else{
+                                println!("No block to migrate!")
+                            }
                         }
 
                         _ => println!("unknown command\n"),
@@ -153,15 +186,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Some(network::Event::InboundRequest {request, channel }) => {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
-                            GeneralRequest::LeaseRequest(key,entry) => {
-                                network_client.handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id).await;
+                            GeneralRequest::LeaseRequests(lease_requests) => {
+                                for lease_request in lease_requests{
+                                    match lease_request{
+                                        GeneralRequest::LeaseRequest(key,entry) => {
+                                           
+                                        network_client.handle_lease_requests(key, entry, &mut bp_tree,&block_migration,&mut commands).await;
+                                        },
+                                        _ => (),
+                                    }
+                                }
+                                network_client.respond(GeneralResponse::LeaseResponse((network_client_id)),channel).await;
                             }
-                            GeneralRequest::MigrateRequest(Block)=>{
-                                network_client.handle_migrate(Block,&mut bp_tree,channel);
+                        
+                            GeneralRequest::LeaseRequest(key,entry) => {
+                                network_client.handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&block_migration,&mut commands).await;
+                            }
+                            GeneralRequest::MigrateRequest(block)=>{
+                                network_client.handle_migrate(block,&mut bp_tree,channel).await;
                                 
                             }
-                            GeneralRequest::InsertOnRemoteParent(Key,BlockId) =>{
-                                network_client.handle_insert_on_remote_parent(Key, BlockId, &mut bp_tree, channel,network_client_id).await;
+                            GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
+                                network_client.handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id).await;
                             }
                         }                       
                         
@@ -209,6 +255,7 @@ struct Opt {
 
 #[derive(Debug,Serialize,Deserialize,Clone,Hash)]
 pub enum GeneralRequest{
+    LeaseRequests(Vec<GeneralRequest>),
     LeaseRequest (Key,Entry),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key,BlockId),

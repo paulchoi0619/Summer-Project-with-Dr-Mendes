@@ -70,7 +70,7 @@
             .build()
             .expect("Valid config");
         let mut gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys.clone()), gossipsub_config)?;
-        gossipsub.subscribe(&topic).unwrap();
+        //gossipsub.subscribe(&topic).unwrap();
         // Build the Swarm, connecting the lower layer transport logic with the
         // higher layer network behaviour logic.
         let swarm = SwarmBuilder::new(
@@ -163,10 +163,10 @@
             receiver.await.expect("Sender not to be dropped.")
         }
 
-        pub async fn get_closest_peer(&mut self, block_id:String) -> Vec<PeerId>{
+        pub async fn get_closest_peer(&mut self, id:PeerId) -> Vec<PeerId>{
             let (sender, receiver) = oneshot::channel();
             self.sender
-                .send(Command::GetClosestPeers { block_id, sender })
+                .send(Command::GetClosestPeers { id, sender })
                 .await
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.")
@@ -175,7 +175,7 @@
         pub async fn request(&mut self, peer: PeerId,request:GeneralRequest) -> Result<String, Box<dyn Error + Send>> {
             let (sender, receiver) = oneshot::channel();
             self.sender
-                .send(Command::RequestLease {
+                .send(Command::Request {
                     peer,
                     request,
                     sender,
@@ -200,16 +200,102 @@
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.");
         }
-        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId){
+
+        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId,
+        block_migration:&HashSet<BlockId>,commands:&mut HashMap<BlockId,Vec<GeneralRequest>>){
+
             let top_id = bp_tree.get_top_id();
             let current_id = bp_tree.find(top_id,key);
             let current_block = bp_tree.get_block(current_id);
+            if block_migration.contains(&current_id){
+                if commands.contains_key(&current_id){
+                    let requests =  commands.get_mut(&current_id).unwrap();
+                    requests.push(GeneralRequest::LeaseRequest(key,entry));
+                }
+                else{
+                    commands.insert(current_id,vec![GeneralRequest::LeaseRequest(key,entry)]);
+                }
+                return;
+            } 
             if current_block.is_leaf(){
                 let result = bp_tree.insert(current_id,key,entry);
                 match result{
                     InsertResult::Complete =>{
                         self.respond(GeneralResponse::LeaseResponse(receiver),channel).await;
                         println!("{:?}",bp_tree.get_block_map());
+                    }
+                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
+                        let providers = self.get_providers(parent.to_string()).await;
+                        if providers.is_empty() {
+                            println!("Could not find parent.");
+                        }
+                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
+                        let requests = providers.into_iter().map(|p| {
+                    
+                            let mut network_client = self.clone();
+                            let parent_call = parent_call.clone();
+                            async move { network_client.request(p,parent_call).await }.boxed()
+                        });
+                        let insert_info = futures::future::select_ok(requests).await;
+                        match insert_info{
+                            Ok(str) => {
+                                println!("Here {:?}", str.0);
+                                
+                            },
+                            Err(err) => {
+                            println!("Error {:?}", err);
+                            }
+                        };
+                    }
+                }
+                
+            }
+            else{
+                let providers = self.get_providers(current_id.to_string()).await;
+
+                if providers.is_empty() {
+                    println!("Could not find provider for lease.");
+                }
+                let lease = GeneralRequest::LeaseRequest(key,entry);
+                let requests = providers.into_iter().map(|p| {
+                    
+                    let mut network_client = self.clone();
+                    let lease = lease.clone();
+                    async move { network_client.request(p,lease).await }.boxed()
+                });
+                let lease_info = futures::future::select_ok(requests).await;
+                match lease_info{
+                    Ok(str) => {
+                        println!("Here {:?}", str.0);
+                        
+                    },
+                    Err(err) => {
+                    println!("Error {:?}", err);
+                    },
+                };
+        }
+    }
+    pub async fn handle_lease_requests(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,
+        block_migration:&HashSet<BlockId>,commands:&mut HashMap<BlockId,Vec<GeneralRequest>>){
+
+            let top_id = bp_tree.get_top_id();
+            let current_id = bp_tree.find(top_id,key);
+            let current_block = bp_tree.get_block(current_id);
+            if block_migration.contains(&current_id){
+                if commands.contains_key(&current_id){
+                    let requests =  commands.get_mut(&current_id).unwrap();
+                    requests.push(GeneralRequest::LeaseRequest(key,entry));
+                }
+                else{
+                    commands.insert(current_id,vec![GeneralRequest::LeaseRequest(key,entry)]);
+                }
+                return;
+            } 
+            if current_block.is_leaf(){
+                let result = bp_tree.insert(current_id,key,entry);
+                match result{
+                    InsertResult::Complete =>{
+                       return;
                     }
                     InsertResult::InsertOnRemoteParent(parent,key,child) => {
                         let providers = self.get_providers(parent.to_string()).await;
@@ -359,30 +445,31 @@
                             .swarm.behaviour_mut()
                             .kademlia
                             .add_address(&peer, addr);
+                        println!("added: {:?}", peer);
                         self
                             .swarm
                             .behaviour_mut()
                             .gossipsub
                             .add_explicit_peer(&peer);
-                        println!("added: {:?}", peer);
+                       
                     }
                 }
                 SwarmEvent::Behaviour(ComposedEvent::Mdns(
                     MdnsEvent::Expired(expired_list))) => {
-                    for (peer, _addr) in expired_list {
-                        if !self.swarm.behaviour_mut().mdns.has_node(&peer) {
-                            self
-                                .swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .remove_peer(&peer);
-                            self
-                                .swarm
-                                .behaviour_mut()
-                                .gossipsub
-                                .remove_explicit_peer(&peer);
-                        }
-                    }
+                    // for (peer, _addr) in expired_list {
+                    //     if !self.swarm.behaviour_mut().mdns.has_node(&peer) {
+                    //         self
+                    //             .swarm
+                    //             .behaviour_mut()
+                    //             .kademlia
+                    //             .remove_peer(&peer);
+                    //         self
+                    //             .swarm
+                    //             .behaviour_mut()
+                    //             .gossipsub
+                    //             .remove_explicit_peer(&peer);
+                    //     }
+                    // }
                 }
                 SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Message {
                     propagation_source: peer_id,
@@ -557,16 +644,16 @@
                         .get_providers(file_name.into_bytes().into());
                     self.pending_get_providers.insert(query_id, sender);
                 }
-                Command::GetClosestPeers{block_id,sender}=>{
-                    let key =block_id.into_bytes();
+                Command::GetClosestPeers{id,sender}=>{
+                    
                     let query_id = self
                         .swarm
                         .behaviour_mut()
                         .kademlia
-                        .get_closest_peers(key);
+                        .get_closest_peers(id);
                     self.pending_get_closest_peers.insert(query_id, sender);
                 }
-                Command::RequestLease { peer,request,sender, } => {
+                Command::Request { peer,request,sender, } => {
                     let request= serde_json::to_string(&request).unwrap();
                     let request_id = self
                         .swarm
@@ -594,12 +681,6 @@
                     self.pending_start_providing.insert(query_id,sender);
                 },
 
-                Command::PublishSize {bp_tree_size, sender} =>{
-                    self
-                    .swarm
-                    .behaviour_mut()
-                    .publish(topic.clone(), line.expect("Stdin not to close").as_bytes());
-                }
             }
         }
     }
@@ -664,10 +745,10 @@
             sender: oneshot::Sender<HashSet<PeerId>>,
         },
         GetClosestPeers{
-            block_id: String,
+            id: PeerId,
             sender: oneshot::Sender<Vec<PeerId>>,
         },
-        RequestLease {
+        Request {
             peer: PeerId,
             request: GeneralRequest,
             sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
@@ -680,10 +761,7 @@
             up_root: String,
             sender: oneshot::Sender<()>,
         }, 
-        PublishSize{
-            bp_tree_size: u64,
-            sender: oneshot::Sender<()>,
-        }
+       
 
     }
 

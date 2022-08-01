@@ -14,6 +14,7 @@ use futures::future::Either;
 pub struct BPTree{
     block_map: HashMap<Key,Block>,
     top_id: BlockId,
+    right_block: BlockId
    
 }
 impl BPTree{
@@ -24,7 +25,8 @@ pub fn new (root:Block) -> Self{
     map.insert(root.block_id,root);
     Self{
     block_map: map,
-    top_id: id
+    top_id: id,
+    right_block: Default::default()
     }
 }
 
@@ -37,7 +39,9 @@ pub fn get_block_map(&self) -> &HashMap<Key,Block>{
 pub fn get_top_id(&self) -> BlockId{
     self.top_id
 }
-
+pub fn get_right_block(&self) -> BlockId{
+    self.right_block
+}
 pub fn get_block(&mut self,id:BlockId) -> &mut Block{
     self.block_map.get_mut(&id).unwrap()
 }
@@ -92,7 +96,7 @@ pub fn insert(&mut self,leaf_id:BlockId,key:Key,entry:Entry)->InsertResult{
     if leaf.keys.len() ==SIZE{
         let mut newleaf= leaf.clone(); //create a new leaf to split and update block map
         let result = newleaf.split_leaf_block(&mut self.block_map);
-          
+        self.right_block = result.right; // for future migration 
         return self.insert_on_parent(result.left,result.divider_key,result.right);
         
     }
