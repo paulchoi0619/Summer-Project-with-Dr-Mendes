@@ -29,7 +29,9 @@ pub fn new (root:Block) -> Self{
     right_block: Default::default()
     }
 }
-
+pub fn remove_block(&mut self, id:BlockId){
+    self.block_map.remove(&id);
+}
 pub fn add_block(&mut self,id:BlockId,block:Block){
     self.block_map.insert(id,block);
 }

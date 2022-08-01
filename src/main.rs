@@ -160,6 +160,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     Ok(str) => 
                                     {println!("Here {:?}", str);
                                     block_migration.remove(&right_block); //migration is complete
+                                    bp_tree.remove_block(right_block); // remove block from block map
                                     if commands.contains_key(&right_block){
                                     let lease_commands = commands.remove(&right_block).unwrap().clone();
                                     let lease_requests = GeneralRequest::LeaseRequests(lease_commands);
