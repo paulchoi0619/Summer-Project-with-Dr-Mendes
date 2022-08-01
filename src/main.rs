@@ -164,7 +164,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let lease_commands = commands.remove(&right_block).unwrap().clone();
                                     let lease_requests = GeneralRequest::LeaseRequests(lease_commands);
                                     network_client.request(peer,lease_requests).await; //dumping all the commands 
-
+                                    bp_tree.reset_right_block();
                                 }
                                 },
                                     Err(err) => println!("Error {:?}", err),

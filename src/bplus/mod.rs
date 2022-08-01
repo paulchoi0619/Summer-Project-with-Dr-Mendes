@@ -42,6 +42,9 @@ pub fn get_top_id(&self) -> BlockId{
 pub fn get_right_block(&self) -> BlockId{
     self.right_block
 }
+pub fn reset_right_block(&mut self){
+    self.right_block = Default::default(); //reset after migration
+}
 pub fn get_block(&mut self,id:BlockId) -> &mut Block{
     self.block_map.get_mut(&id).unwrap()
 }
