@@ -138,6 +138,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 println!("root already exists!")
                             }
                         },
+                        cmd if cmd.starts_with("size") => {
+                            
+                        }
 
                         _ => println!("unknown command\n"),
                     }

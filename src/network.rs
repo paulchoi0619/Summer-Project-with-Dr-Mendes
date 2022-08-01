@@ -83,7 +83,7 @@
                     Default::default(),
                 ),
                 mdns: Mdns::new(MdnsConfig::default()).await?,
-                gossipsub,
+                gossipsub:gossipsub,
             },
             peer_id,
         )
@@ -593,6 +593,13 @@
                         .expect("No store error.");
                     self.pending_start_providing.insert(query_id,sender);
                 },
+
+                Command::PublishSize {bp_tree_size, sender} =>{
+                    self
+                    .swarm
+                    .behaviour_mut()
+                    .publish(topic.clone(), line.expect("Stdin not to close").as_bytes());
+                }
             }
         }
     }
@@ -673,6 +680,10 @@
             up_root: String,
             sender: oneshot::Sender<()>,
         }, 
+        PublishSize{
+            bp_tree_size: u64,
+            sender: oneshot::Sender<()>,
+        }
 
     }
 
