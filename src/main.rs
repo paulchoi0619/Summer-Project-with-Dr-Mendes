@@ -101,7 +101,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
-
                                                 let requests = providers.into_iter().map(|p| {
                                                     
                                                     let mut network_client = network_client.clone();
@@ -152,13 +151,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
                             GeneralRequest::LeaseRequest(key,entry) => {
-                                network_client.handle_lease_request(key, entry, &mut bp_tree, channel).await;
+                                network_client.handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id).await;
                             }
                             GeneralRequest::MigrateRequest(Block)=>{
-                            
+                                network_client.handle_migrate(Block,&mut bp_tree,channel);
+                                
                             }
                             GeneralRequest::InsertOnRemoteParent(Key,BlockId) =>{
-                                network_client.handle_insert_on_remote_parent(Key, BlockId, &mut bp_tree, channel).await;
+                                network_client.handle_insert_on_remote_parent(Key, BlockId, &mut bp_tree, channel,network_client_id).await;
                             }
                         }                       
                         
@@ -210,7 +210,12 @@ pub enum GeneralRequest{
     MigrateRequest(Block),
     InsertOnRemoteParent(Key,BlockId),
 }
-
+#[derive(Debug,Serialize,Deserialize,Clone,Hash)]
+pub enum GeneralResponse{
+    LeaseResponse(PeerId),
+    MigrateResponse,
+    InsertOnRemoteParent(PeerId),
+}
 
 
 

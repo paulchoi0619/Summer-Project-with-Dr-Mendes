@@ -27,6 +27,10 @@ pub fn new (root:Block) -> Self{
     top_id: id
     }
 }
+
+pub fn add_block(&mut self,id:BlockId,block:Block){
+    self.block_map.insert(id,block);
+}
 pub fn get_block_map(&self) -> &HashMap<Key,Block>{
     &self.block_map
 }
@@ -48,6 +52,7 @@ pub fn find(&self, block_id:BlockId,k:Key)->BlockId{
                 return self.find(new_id,k);}
                 else{
                     return new_id;
+
                 }
             }
         }
@@ -74,6 +79,7 @@ pub fn insert_child(&mut self, key:Key, child:BlockId) ->InsertResult{
         let result = new_block.split_internal_block(&mut self.block_map);
         return self.insert_on_parent(result.left,result.divider_key,result.right);
     }
+
     else{
         return InsertResult::Complete;
     }
@@ -92,39 +98,32 @@ pub fn insert(&mut self,leaf_id:BlockId,key:Key,entry:Entry)->InsertResult{
     }
     InsertResult::Complete
 }
+
+
 pub fn insert_on_parent(&mut self,left:BlockId,key:Key,right:BlockId)->InsertResult{
-    let mut rightblock = self.block_map.get(&right).unwrap().clone(); //retrieve right block from the block map if it exists
+    
     let mut leftblock = self.block_map.get_mut(&left).unwrap().clone(); //retrieve left block from the block map
     if left== self.top_id{
-        
+        let mut rightblock = self.block_map.get(&right).unwrap().clone(); //retrieve right block from the block map 
         let mut new_root =  Block::new(); 
         new_root.block_id = left; // new root acquires left child's block id to streamline the process of finding the provider of this block
-        self.top_id = new_root.block_id;
-       
         new_root.is_leaf=false;
-        
-        new_root.children.push(left);
-        new_root.add_child(key,right);
-       
-        rightblock.parent = new_root.block_id; //update parent of right block
+        leftblock.set_block_id(); // assign new block id to the left block
         leftblock.parent = new_root.block_id; //update parent of left block
-        leftblock.set_block_id(); // assign new block id 
-        self.top_id = new_root.block_id;
+        rightblock.parent = new_root.block_id; //update parent of right block
+        new_root.children.push(leftblock.block_id);
+        new_root.add_child(key,right);
         self.block_map.insert(new_root.block_id,new_root);// add new root to block map
-        self.block_map.insert(rightblock.block_id,rightblock); // insert/update right block
-        self.block_map.insert(leftblock.block_id,leftblock); // update left block
+        self.block_map.insert(rightblock.block_id,rightblock); // add right block
+        self.block_map.insert(leftblock.block_id,leftblock); // add left block
         return InsertResult::Complete;
     }
     else{
-        rightblock.parent = leftblock.parent;
         if !self.block_map.contains_key(&leftblock.parent){
-            
             return InsertResult::InsertOnRemoteParent(leftblock.parent,key,right);
-
         }
         let mut parent = self.block_map.get_mut(&leftblock.parent).unwrap().clone(); //retrieve parent block
         parent.add_child(key,right);  //add right block to the parent
-        self.block_map.insert(rightblock.block_id,rightblock); //update right block in map
         
         if parent.keys.len()== SIZE{
         let result = parent.split_internal_block(&mut self.block_map);
@@ -234,6 +233,7 @@ impl Block{
         }
 
         result.divider_key = rightblock.keys[0];
+        rightblock.parent = leftblock.parent; //update right block's parent
         block_map.insert(rightblock.block_id,rightblock); //insert into map 
         block_map.insert(leftblock.block_id,leftblock); //update 
         return result;
@@ -261,6 +261,7 @@ impl Block{
             leftblock.children.pop();
         }
         result.divider_key = leftblock.keys.pop().unwrap();
+        rightblock.parent = leftblock.parent; //update right block's parent
         block_map.insert(rightblock.block_id,rightblock); //insert into map
         block_map.insert(leftblock.block_id,leftblock); //update 
         return result;
@@ -272,6 +273,7 @@ pub enum InsertResult{
     Complete,
     InsertOnRemoteParent(BlockId,Key,BlockId),
 }
+
 pub struct SplitResult{
     left: BlockId,
     right: BlockId,

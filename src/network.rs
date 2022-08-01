@@ -55,6 +55,7 @@
             }
             None => identity::Keypair::generate_ed25519(),
         };
+        let topic = Topic::new("size");
         let peer_id = id_keys.public().to_peer_id();
         let message_id_fn = |message: &GossipsubMessage| {
             let mut s = DefaultHasher::new();
@@ -68,7 +69,8 @@
             .message_id_fn(message_id_fn)
             .build()
             .expect("Valid config");
-            
+        let mut gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys.clone()), gossipsub_config)?;
+        gossipsub.subscribe(&topic).unwrap();
         // Build the Swarm, connecting the lower layer transport logic with the
         // higher layer network behaviour logic.
         let swarm = SwarmBuilder::new(
@@ -81,7 +83,7 @@
                     Default::default(),
                 ),
                 mdns: Mdns::new(MdnsConfig::default()).await?,
-                gossipsub: gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys), gossipsub_config)?,
+                gossipsub,
             },
             peer_id,
         )
@@ -183,7 +185,7 @@
             receiver.await.expect("Sender not be dropped.")
         }
 
-        pub async fn respond(&mut self, response: String, channel: ResponseChannel<GenericResponse>) {
+        pub async fn respond(&mut self, response: GeneralResponse, channel: ResponseChannel<GenericResponse>) {
             self.sender
                 .send(Command::Respond { response,  channel })
                 .await
@@ -198,7 +200,7 @@
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.");
         }
-        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId){
             let top_id = bp_tree.get_top_id();
             let current_id = bp_tree.find(top_id,key);
             let current_block = bp_tree.get_block(current_id);
@@ -206,7 +208,7 @@
                 let result = bp_tree.insert(current_id,key,entry);
                 match result{
                     InsertResult::Complete =>{
-                        self.respond("complete".to_string(),channel).await;
+                        self.respond(GeneralResponse::LeaseResponse(receiver),channel).await;
                         println!("{:?}",bp_tree.get_block_map());
                     }
                     InsertResult::InsertOnRemoteParent(parent,key,child) => {
@@ -260,11 +262,11 @@
                 };
         }
     }
-    pub async fn handle_insert_on_remote_parent(&mut self, key:Key,child:BlockId,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+    pub async fn handle_insert_on_remote_parent(&mut self, key:Key,child:BlockId,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId){
         let result  = bp_tree.insert_child(key,child);
         match result{
             InsertResult::Complete =>{
-                self.respond("Completed".to_string(),channel).await;
+                self.respond(GeneralResponse::InsertOnRemoteParent(receiver),channel).await;
             }
             InsertResult::InsertOnRemoteParent(parent,key,child) => {
                 let providers = self.get_providers(parent.to_string()).await;
@@ -290,6 +292,12 @@
                 };
             }
                                 }
+    }
+    pub async fn handle_migrate(&mut self, mut block:Block,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+        let id = block.return_id();
+        bp_tree.add_block(id, block);
+        self.respond(GeneralResponse::MigrateResponse,channel).await;
+        self.start_providing(id.to_string()).await;
     }
 
     }
@@ -658,7 +666,7 @@
             sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
         },
         Respond {
-            response: String,
+            response: GeneralResponse,
             channel: ResponseChannel<GenericResponse>,
         },
         BootRoot {
