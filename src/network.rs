@@ -1,869 +1,884 @@
 
-    use crate::bplus::Key;
+use crate::bplus::Key;
 
-    use super::*;
-    use async_trait::async_trait;
-    use futures::channel::{mpsc, oneshot};
-    use libp2p::core::either::EitherError;
-    use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
-    use libp2p::gossipsub::error::GossipsubHandlerError;
-    use libp2p::gossipsub::{GossipsubEvent, MessageAuthenticity, ValidationMode, IdentTopic as Topic, GossipsubMessage, MessageId};
-    use libp2p::{identity, gossipsub};
-    use libp2p::identity::ed25519;
-    use libp2p::kad::record::store::MemoryStore;
-    use libp2p::kad::{GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,GetClosestPeersOk};
-    use libp2p::mdns::{Mdns, MdnsEvent, MdnsConfig};
-    use libp2p::multiaddr::Protocol;
-    use libp2p::request_response::{
-        ProtocolSupport, RequestId, RequestResponse, RequestResponseCodec, RequestResponseEvent,
-        RequestResponseMessage, ResponseChannel,
+use super::*;
+use async_trait::async_trait;
+use futures::channel::{mpsc, oneshot};
+use libp2p::core::either::EitherError;
+use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
+use libp2p::gossipsub::error::GossipsubHandlerError;
+use libp2p::gossipsub::{
+    GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, MessageId,
+    ValidationMode,
+};
+use libp2p::identity::ed25519;
+use libp2p::kad::record::store::MemoryStore;
+use libp2p::kad::{
+    GetClosestPeersOk, GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,
+};
+use libp2p::mdns::{Mdns, MdnsConfig, MdnsEvent};
+use libp2p::multiaddr::Protocol;
+use libp2p::request_response::{
+    ProtocolSupport, RequestId, RequestResponse, RequestResponseCodec, RequestResponseEvent,
+    RequestResponseMessage, ResponseChannel,
+};
+use libp2p::swarm::{ConnectionHandlerUpgrErr, SwarmBuilder, SwarmEvent};
+use libp2p::{gossipsub, identity};
+use libp2p::{NetworkBehaviour, Swarm};
+use serde_json;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::iter;
+use tokio::io;
+use tokio::time::{sleep, Duration};
+use void;
+
+use bplus::{BPTree, Block, BlockId, Data, Entry, InsertResult, SplitResult, SIZE};
+
+//use serde::{Serialize, Deserialize};
+/// Creates the network components, namely:
+///
+/// - The network client to interact with the network layer from anywhere
+///   within your application.
+///
+/// - The network event stream, e.g. for incoming requests.
+///
+/// - The network task driving the network itself.
+pub async fn new(
+    secret_key_seed: Option<u8>,
+) -> Result<(Client, impl Stream<Item = Event>, EventLoop, PeerId), Box<dyn Error>> {
+    // Create a public/private key pair, either random or based on a seed.
+    let id_keys = match secret_key_seed {
+        Some(seed) => {
+            let mut bytes = [0u8; 32];
+            bytes[0] = seed;
+            let secret_key = ed25519::SecretKey::from_bytes(&mut bytes).expect(
+                "this returns `Err` only if the length is wrong; the length is correct; qed",
+            );
+            identity::Keypair::Ed25519(secret_key.into())
+        }
+        None => identity::Keypair::generate_ed25519(),
     };
-    use libp2p::swarm::{ConnectionHandlerUpgrErr, SwarmBuilder, SwarmEvent};
-    use libp2p::{NetworkBehaviour, Swarm};
-    use tokio::io;
-    use tokio::time::{sleep, Duration};
-    use std::collections::hash_map::DefaultHasher;
-    use std::collections::{HashMap, HashSet};
-    use std::iter;
-    use void;
-    use serde_json;
+    let topic = Topic::new("size");
+    let peer_id = id_keys.public().to_peer_id();
+    let message_id_fn = |message: &GossipsubMessage| {
+        let mut s = DefaultHasher::new();
+        message.data.hash(&mut s);
+        MessageId::from(s.finish().to_string())
+    };
 
+    let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
+        .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
+        .validation_mode(ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
+        .message_id_fn(message_id_fn)
+        .build()
+        .expect("Valid config");
+    let mut gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(
+        MessageAuthenticity::Signed(id_keys.clone()),
+        gossipsub_config,
+    )?;
+    //gossipsub.subscribe(&topic).unwrap();
+    // Build the Swarm, connecting the lower layer transport logic with the
+    // higher layer network behaviour logic.
+    let swarm = SwarmBuilder::new(
+        libp2p::development_transport(id_keys.clone()).await?,
+        ComposedBehaviour {
+            kademlia: Kademlia::new(peer_id, MemoryStore::new(peer_id)),
+            request_response: RequestResponse::new(
+                GenericExchangeCodec(),
+                iter::once((GenericProtocol(), ProtocolSupport::Full)),
+                Default::default(),
+            ),
+            mdns: Mdns::new(MdnsConfig::default()).await?,
+            gossipsub: gossipsub,
+        },
+        peer_id,
+    )
+    .build();
 
-    use bplus::{BPTree,Block,SplitResult,Entry,Data,SIZE,InsertResult, BlockId};
+    let (command_sender, command_receiver) = mpsc::channel(0);
+    let (event_sender, event_receiver) = mpsc::channel(0);
+    // let mut lease_map = HashMap::new();
 
-    //use serde::{Serialize, Deserialize};
-    /// Creates the network components, namely:
-    ///
-    /// - The network client to interact with the network layer from anywhere
-    ///   within your application.
-    ///
-    /// - The network event stream, e.g. for incoming requests.
-    ///
-    /// - The network task driving the network itself.
-    pub async fn new(
-        secret_key_seed: Option<u8>,
-    ) -> Result<(Client, impl Stream<Item = Event>, EventLoop, PeerId), Box<dyn Error>> {
-        // Create a public/private key pair, either random or based on a seed.
-        let id_keys = match secret_key_seed {
-            Some(seed) => {
-                let mut bytes = [0u8; 32];
-                bytes[0] = seed;
-                let secret_key = ed25519::SecretKey::from_bytes(&mut bytes).expect(
-                    "this returns `Err` only if the length is wrong; the length is correct; qed",
-                );
-                identity::Keypair::Ed25519(secret_key.into())
+    Ok((
+        Client {
+            sender: command_sender,
+        },
+        event_receiver,
+        EventLoop::new(swarm, command_receiver, event_sender),
+        peer_id,
+    ))
+}
+
+#[derive(Clone)]
+pub struct Client {
+    sender: mpsc::Sender<Command>,
+}
+
+impl Client {
+    /// Listen for incoming connections on the given address.
+
+    pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::StartListening { addr, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
+
+    /// Dial the given peer at the given address.
+    pub async fn dial(
+        &mut self,
+        peer_id: PeerId,
+        peer_addr: Multiaddr,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::Dial {
+                peer_id,
+                peer_addr,
+                sender,
+            })
+            .await
+            .expect("Command receiver not to be dropped.");
+        println!("dialed {:?}", peer_id);
+        receiver.await.expect("Sender not to be dropped.")
+    }
+    /// Advertise the local node as the provider of the given file on the DHT.
+    pub async fn start_providing(&mut self, file_name: String) {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::StartProviding { file_name, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.");
+    }
+    /// Find the providers for the given file on the DHT.
+    pub async fn get_providers(&mut self, file_name: String) -> HashSet<PeerId> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::GetProviders { file_name, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
+
+    pub async fn get_closest_peer(&mut self, id: PeerId) -> Vec<PeerId> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::GetClosestPeers { id, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
+
+    pub async fn request(
+        &mut self,
+        peer: PeerId,
+        request: GeneralRequest,
+    ) -> Result<String, Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::Request {
+                peer,
+                request,
+                sender,
+            })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not be dropped.")
+    }
+
+    pub async fn respond(
+        &mut self,
+        response: GeneralResponse,
+        channel: ResponseChannel<GenericResponse>,
+    ) {
+        self.sender
+            .send(Command::Respond { response, channel })
+            .await
+            .expect("Command receiver not to be dropped.");
+    }
+
+    pub async fn boot_root(&mut self) {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::BootRoot {
+                up_root: "root".to_string(),
+                sender,
+            })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.");
+    }
+
+    pub async fn handle_lease_request(
+        &mut self,
+        key: Key,
+        entry: Entry,
+        bp_tree: &mut BPTree,
+        channel: ResponseChannel<GenericResponse>,
+        receiver: PeerId,
+        block_migration: &HashSet<BlockId>,
+        commands: &mut HashMap<BlockId, Vec<GeneralRequest>>,
+    ) {
+        let top_id = bp_tree.get_top_id();
+        let current_id = bp_tree.find(top_id, key);
+        let current_block = bp_tree.get_block(current_id);
+        if block_migration.contains(&current_id) {
+            if commands.contains_key(&current_id) {
+                let requests = commands.get_mut(&current_id).unwrap();
+                requests.push(GeneralRequest::LeaseRequest(key, entry));
+            } else {
+                commands.insert(current_id, vec![GeneralRequest::LeaseRequest(key, entry)]);
             }
-            None => identity::Keypair::generate_ed25519(),
-        };
-        let topic = Topic::new("size");
-        let peer_id = id_keys.public().to_peer_id();
-        let message_id_fn = |message: &GossipsubMessage| {
-            let mut s = DefaultHasher::new();
-            message.data.hash(&mut s);
-            MessageId::from(s.finish().to_string())
-        };
-        
-        let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
-            .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
-            .validation_mode(ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-            .message_id_fn(message_id_fn)
-            .build()
-            .expect("Valid config");
-        let mut gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys.clone()), gossipsub_config)?;
-        //gossipsub.subscribe(&topic).unwrap();
-        // Build the Swarm, connecting the lower layer transport logic with the
-        // higher layer network behaviour logic.
-        let swarm = SwarmBuilder::new(
-            libp2p::development_transport(id_keys.clone()).await?,
-            ComposedBehaviour {
-                kademlia: Kademlia::new(peer_id, MemoryStore::new(peer_id)),
-                request_response: RequestResponse::new(
-                    GenericExchangeCodec(),
-                    iter::once((GenericProtocol(), ProtocolSupport::Full)),
-                    Default::default(),
-                ),
-                mdns: Mdns::new(MdnsConfig::default()).await?,
-                gossipsub:gossipsub,
-            },
-            peer_id,
-        )
-        .build();
-
-        let (command_sender, command_receiver) = mpsc::channel(0);
-        let (event_sender, event_receiver) = mpsc::channel(0);
-        // let mut lease_map = HashMap::new();
-
-
-        Ok((
-            Client {
-                sender: command_sender,
-            },
-            event_receiver,
-            EventLoop::new(swarm, command_receiver, event_sender),
-            peer_id,
-        ))
-    }
-
-
-
-    #[derive(Clone)]
-    pub struct Client {
-        sender: mpsc::Sender<Command>,
-    }
-
-    impl Client {
-        /// Listen for incoming connections on the given address.
-
-        pub async fn start_listening(
-            &mut self,
-            addr: Multiaddr,
-        ) -> Result<(), Box<dyn Error + Send>> {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::StartListening { addr, sender })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not to be dropped.")
+            return;
         }
-
-        /// Dial the given peer at the given address.
-        pub async fn dial(
-            &mut self,
-            peer_id: PeerId,
-            peer_addr: Multiaddr,
-        ) -> Result<(), Box<dyn Error + Send>> {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::Dial {
-                    peer_id,
-                    peer_addr,
-                    sender,
-                })
-                .await
-                .expect("Command receiver not to be dropped.");
-            println!("dialed {:?}", peer_id);
-            receiver.await.expect("Sender not to be dropped.")
-        }
-        /// Advertise the local node as the provider of the given file on the DHT.
-        pub async fn start_providing(&mut self, file_name: String) {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::StartProviding { file_name, sender })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not to be dropped.");
-        }
-        /// Find the providers for the given file on the DHT.
-        pub async fn get_providers(&mut self, file_name: String) -> HashSet<PeerId> {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::GetProviders { file_name, sender })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not to be dropped.")
-        }
-
-        pub async fn get_closest_peer(&mut self, id:PeerId) -> Vec<PeerId>{
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::GetClosestPeers { id, sender })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not to be dropped.")
-        }
-
-        pub async fn request(&mut self, peer: PeerId,request:GeneralRequest) -> Result<String, Box<dyn Error + Send>> {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::Request {
-                    peer,
-                    request,
-                    sender,
-                })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not be dropped.")
-        }
-
-        pub async fn respond(&mut self, response: GeneralResponse, channel: ResponseChannel<GenericResponse>) {
-            self.sender
-                .send(Command::Respond { response,  channel })
-                .await
-                .expect("Command receiver not to be dropped.");
-        }
-
-        pub async fn boot_root(&mut self) {
-            let (sender, receiver) = oneshot::channel();
-            self.sender
-                .send(Command::BootRoot { up_root: "root".to_string(), sender })
-                .await
-                .expect("Command receiver not to be dropped.");
-            receiver.await.expect("Sender not to be dropped.");
-        }
-
-        pub async fn handle_lease_request(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId,
-        block_migration:&HashSet<BlockId>,commands:&mut HashMap<BlockId,Vec<GeneralRequest>>){
-
-            let top_id = bp_tree.get_top_id();
-            let current_id = bp_tree.find(top_id,key);
-            let current_block = bp_tree.get_block(current_id);
-            if block_migration.contains(&current_id){
-                if commands.contains_key(&current_id){
-                    let requests =  commands.get_mut(&current_id).unwrap();
-                    requests.push(GeneralRequest::LeaseRequest(key,entry));
+        if current_block.is_leaf() {
+            let result = bp_tree.insert(current_id, key, entry);
+            match result {
+                InsertResult::Complete => {
+                    self.respond(GeneralResponse::LeaseResponse(receiver), channel)
+                        .await;
+                    println!("{:?}", bp_tree.get_block_map());
                 }
-                else{
-                    commands.insert(current_id,vec![GeneralRequest::LeaseRequest(key,entry)]);
-                }
-                return;
-            } 
-            if current_block.is_leaf(){
-                let result = bp_tree.insert(current_id,key,entry);
-                match result{
-                    InsertResult::Complete =>{
-                        self.respond(GeneralResponse::LeaseResponse(receiver),channel).await;
-                        println!("{:?}",bp_tree.get_block_map());
+                InsertResult::InsertOnRemoteParent(parent, key, child) => {
+                    let providers = self.get_providers(parent.to_string()).await;
+                    if providers.is_empty() {
+                        println!("Could not find parent.");
                     }
-                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
-                        let providers = self.get_providers(parent.to_string()).await;
-                        if providers.is_empty() {
-                            println!("Could not find parent.");
+                    let parent_call = GeneralRequest::InsertOnRemoteParent(key, child);
+                    let requests = providers.into_iter().map(|p| {
+                        let mut network_client = self.clone();
+                        let parent_call = parent_call.clone();
+                        async move { network_client.request(p, parent_call).await }.boxed()
+                    });
+                    let insert_info = futures::future::select_ok(requests).await;
+                    match insert_info {
+                        Ok(str) => {
+                            println!("Here {:?}", str.0);
                         }
-                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
-                        let requests = providers.into_iter().map(|p| {
-                    
-                            let mut network_client = self.clone();
-                            let parent_call = parent_call.clone();
-                            async move { network_client.request(p,parent_call).await }.boxed()
-                        });
-                        let insert_info = futures::future::select_ok(requests).await;
-                        match insert_info{
-                            Ok(str) => {
-                                println!("Here {:?}", str.0);
-                                
-                            },
-                            Err(err) => {
+                        Err(err) => {
                             println!("Error {:?}", err);
-                            }
-                        };
-                    }
-                }
-                
-            }
-            else{
-                let providers = self.get_providers(current_id.to_string()).await;
-
-                if providers.is_empty() {
-                    println!("Could not find provider for lease.");
-                }
-                let lease = GeneralRequest::LeaseRequest(key,entry);
-                let requests = providers.into_iter().map(|p| {
-                    
-                    let mut network_client = self.clone();
-                    let lease = lease.clone();
-                    async move { network_client.request(p,lease).await }.boxed()
-                });
-                let lease_info = futures::future::select_ok(requests).await;
-                match lease_info{
-                    Ok(str) => {
-                        println!("Here {:?}", str.0);
-                        
-                    },
-                    Err(err) => {
-                    println!("Error {:?}", err);
-                    },
-                };
-        }
-    }
-    pub async fn handle_lease_requests(&mut self,key:Key,entry:Entry,bp_tree:&mut BPTree,
-        block_migration:&HashSet<BlockId>,commands:&mut HashMap<BlockId,Vec<GeneralRequest>>){
-
-            let top_id = bp_tree.get_top_id();
-            let current_id = bp_tree.find(top_id,key);
-            let current_block = bp_tree.get_block(current_id);
-            if block_migration.contains(&current_id){
-                if commands.contains_key(&current_id){
-                    let requests =  commands.get_mut(&current_id).unwrap();
-                    requests.push(GeneralRequest::LeaseRequest(key,entry));
-                }
-                else{
-                    commands.insert(current_id,vec![GeneralRequest::LeaseRequest(key,entry)]);
-                }
-                return;
-            } 
-            if current_block.is_leaf(){
-                let result = bp_tree.insert(current_id,key,entry);
-                match result{
-                    InsertResult::Complete =>{
-                       return;
-                    }
-                    InsertResult::InsertOnRemoteParent(parent,key,child) => {
-                        let providers = self.get_providers(parent.to_string()).await;
-                        if providers.is_empty() {
-                            println!("Could not find parent.");
                         }
-                        let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
-                        let requests = providers.into_iter().map(|p| {
-                    
-                            let mut network_client = self.clone();
-                            let parent_call = parent_call.clone();
-                            async move { network_client.request(p,parent_call).await }.boxed()
-                        });
-                        let insert_info = futures::future::select_ok(requests).await;
-                        match insert_info{
-                            Ok(str) => {
-                                println!("Here {:?}", str.0);
-                                
-                            },
-                            Err(err) => {
-                            println!("Error {:?}", err);
-                            }
-                        };
-                    }
+                    };
                 }
-                
             }
-            else{
-                let providers = self.get_providers(current_id.to_string()).await;
+        } else {
+            let providers = self.get_providers(current_id.to_string()).await;
 
-                if providers.is_empty() {
-                    println!("Could not find provider for lease.");
+            if providers.is_empty() {
+                println!("Could not find provider for lease.");
+            }
+            let lease = GeneralRequest::LeaseRequest(key, entry);
+            let requests = providers.into_iter().map(|p| {
+                let mut network_client = self.clone();
+                let lease = lease.clone();
+                async move { network_client.request(p, lease).await }.boxed()
+            });
+            let lease_info = futures::future::select_ok(requests).await;
+            match lease_info {
+                Ok(str) => {
+                    println!("Here {:?}", str.0);
                 }
-                let lease = GeneralRequest::LeaseRequest(key,entry);
-                let requests = providers.into_iter().map(|p| {
-                    
-                    let mut network_client = self.clone();
-                    let lease = lease.clone();
-                    async move { network_client.request(p,lease).await }.boxed()
-                });
-                let lease_info = futures::future::select_ok(requests).await;
-                match lease_info{
-                    Ok(str) => {
-                        println!("Here {:?}", str.0);
-                        
-                    },
-                    Err(err) => {
+                Err(err) => {
                     println!("Error {:?}", err);
-                    },
-                };
+                }
+            };
         }
     }
-    pub async fn handle_insert_on_remote_parent(&mut self, key:Key,child:BlockId,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>,receiver:PeerId){
-        let result  = bp_tree.insert_child(key,child);
-        match result{
-            InsertResult::Complete =>{
-                self.respond(GeneralResponse::InsertOnRemoteParent(receiver),channel).await;
+    pub async fn handle_lease_requests(
+        &mut self,
+        key: Key,
+        entry: Entry,
+        bp_tree: &mut BPTree,
+        block_migration: &HashSet<BlockId>,
+        commands: &mut HashMap<BlockId, Vec<GeneralRequest>>,
+    ) {
+        let top_id = bp_tree.get_top_id();
+        let current_id = bp_tree.find(top_id, key);
+        let current_block = bp_tree.get_block(current_id);
+        if block_migration.contains(&current_id) {
+            if commands.contains_key(&current_id) {
+                let requests = commands.get_mut(&current_id).unwrap();
+                requests.push(GeneralRequest::LeaseRequest(key, entry));
+            } else {
+                commands.insert(current_id, vec![GeneralRequest::LeaseRequest(key, entry)]);
             }
-            InsertResult::InsertOnRemoteParent(parent,key,child) => {
+            return;
+        }
+        if current_block.is_leaf() {
+            let result = bp_tree.insert(current_id, key, entry);
+            match result {
+                InsertResult::Complete => {
+                    return;
+                }
+                InsertResult::InsertOnRemoteParent(parent, key, child) => {
+                    let providers = self.get_providers(parent.to_string()).await;
+                    if providers.is_empty() {
+                        println!("Could not find parent.");
+                    }
+                    let parent_call = GeneralRequest::InsertOnRemoteParent(key, child);
+                    let requests = providers.into_iter().map(|p| {
+                        let mut network_client = self.clone();
+                        let parent_call = parent_call.clone();
+                        async move { network_client.request(p, parent_call).await }.boxed()
+                    });
+                    let insert_info = futures::future::select_ok(requests).await;
+                    match insert_info {
+                        Ok(str) => {
+                            println!("Here {:?}", str.0);
+                        }
+                        Err(err) => {
+                            println!("Error {:?}", err);
+                        }
+                    };
+                }
+            }
+        } else {
+            let providers = self.get_providers(current_id.to_string()).await;
+
+            if providers.is_empty() {
+                println!("Could not find provider for lease.");
+            }
+            let lease = GeneralRequest::LeaseRequest(key, entry);
+            let requests = providers.into_iter().map(|p| {
+                let mut network_client = self.clone();
+                let lease = lease.clone();
+                async move { network_client.request(p, lease).await }.boxed()
+            });
+            let lease_info = futures::future::select_ok(requests).await;
+            match lease_info {
+                Ok(str) => {
+                    println!("Here {:?}", str.0);
+                }
+                Err(err) => {
+                    println!("Error {:?}", err);
+                }
+            };
+        }
+    }
+    pub async fn handle_insert_on_remote_parent(
+        &mut self,
+        key: Key,
+        child: BlockId,
+        bp_tree: &mut BPTree,
+        channel: ResponseChannel<GenericResponse>,
+        receiver: PeerId,
+    ) {
+        let result = bp_tree.insert_child(key, child);
+        match result {
+            InsertResult::Complete => {
+                self.respond(GeneralResponse::InsertOnRemoteParent(receiver), channel)
+                    .await;
+            }
+            InsertResult::InsertOnRemoteParent(parent, key, child) => {
                 let providers = self.get_providers(parent.to_string()).await;
                 if providers.is_empty() {
                     println!("Could not find parent.");
                 }
-                let parent_call = GeneralRequest::InsertOnRemoteParent(key,child);
+                let parent_call = GeneralRequest::InsertOnRemoteParent(key, child);
                 let requests = providers.into_iter().map(|p| {
-            
                     let mut network_client = self.clone();
                     let parent_call = parent_call.clone();
-                    async move { network_client.request(p,parent_call).await }.boxed()
+                    async move { network_client.request(p, parent_call).await }.boxed()
                 });
                 let insert_info = futures::future::select_ok(requests).await;
-                match insert_info{
+                match insert_info {
                     Ok(str) => {
                         println!("Here {:?}", str.0);
-                        
-                    },
+                    }
                     Err(err) => {
-                    println!("Error {:?}", err);
-                    },
+                        println!("Error {:?}", err);
+                    }
                 };
             }
-                                }
+        }
     }
-    pub async fn handle_migrate(&mut self, mut block:Block,bp_tree:&mut BPTree,channel: ResponseChannel<GenericResponse>){
+    pub async fn handle_migrate(
+        &mut self,
+        mut block: Block,
+        bp_tree: &mut BPTree,
+        channel: ResponseChannel<GenericResponse>,
+    ) {
         let id = block.return_id();
         bp_tree.add_block(id, block);
-        self.respond(GeneralResponse::MigrateResponse,channel).await;
+        self.respond(GeneralResponse::MigrateResponse, channel)
+            .await;
         self.start_providing(id.to_string()).await;
     }
+}
 
-    }
-   
-    pub struct EventLoop {
+pub struct EventLoop {
+    swarm: Swarm<ComposedBehaviour>,
+    command_receiver: mpsc::Receiver<Command>,
+    event_sender: mpsc::Sender<Event>,
+    pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>,
+    pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
+    pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
+    pending_get_closest_peers: HashMap<QueryId, oneshot::Sender<Vec<PeerId>>>,
+    pending_request: HashMap<RequestId, oneshot::Sender<Result<String, Box<dyn Error + Send>>>>,
+}
+impl EventLoop {
+    fn new(
         swarm: Swarm<ComposedBehaviour>,
         command_receiver: mpsc::Receiver<Command>,
         event_sender: mpsc::Sender<Event>,
-        pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>,
-        pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
-        pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
-        pending_get_closest_peers: HashMap<QueryId, oneshot::Sender<Vec<PeerId>>>,
-        pending_request:
-            HashMap<RequestId, oneshot::Sender<Result<String, Box<dyn Error + Send>>>>,
+    ) -> Self {
+        Self {
+            swarm,
+            command_receiver,
+            event_sender,
+            pending_dial: Default::default(),
+            pending_start_providing: Default::default(),
+            pending_get_providers: Default::default(),
+            pending_request: Default::default(),
+            pending_get_closest_peers: Default::default(),
+        }
     }
-    impl EventLoop {
-        fn new(
-            swarm: Swarm<ComposedBehaviour>,
-            command_receiver: mpsc::Receiver<Command>,
-            event_sender: mpsc::Sender<Event>,
-        ) -> Self {
-            Self {
-                swarm,
-                command_receiver,
-                event_sender,
-                pending_dial: Default::default(),
-                pending_start_providing: Default::default(),
-                pending_get_providers: Default::default(),
-                pending_request: Default::default(),
-                pending_get_closest_peers: Default::default(),
-            }
-        }
 
-        pub async fn run(mut self) {
-            loop {
-                futures::select! {
-                    event = self.swarm.next() => self.handle_event(event.expect("Swarm stream to be infinite.")).await  ,
-                    command = self.command_receiver.next() => match command {
-                        Some(c) => self.handle_command(c).await,
-                        // Command channel closed, thus shutting down the network event loop.
-                        None=>  return,
-                    },
-                }
-            }
-        }
-
-        async fn handle_event(
-            &mut self,
-            event: SwarmEvent<
-            ComposedEvent,
-            EitherError<EitherError<EitherError<ConnectionHandlerUpgrErr<io::Error>, io::Error>,void::Void>, GossipsubHandlerError>,
-            >,
-        ) {
-            match event {
-                SwarmEvent::Behaviour(ComposedEvent::Mdns(
-                    MdnsEvent::Discovered(discovered_list))) => {
-                    for (peer, addr) in discovered_list {
-                        self
-                            .swarm.behaviour_mut()
-                            .kademlia
-                            .add_address(&peer, addr);
-                        println!("added: {:?}", peer);
-                        self
-                            .swarm
-                            .behaviour_mut()
-                            .gossipsub
-                            .add_explicit_peer(&peer);
-                       
-                    }
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Mdns(
-                    MdnsEvent::Expired(expired_list))) => {
-                    // for (peer, _addr) in expired_list {
-                    //     if !self.swarm.behaviour_mut().mdns.has_node(&peer) {
-                    //         self
-                    //             .swarm
-                    //             .behaviour_mut()
-                    //             .kademlia
-                    //             .remove_peer(&peer);
-                    //         self
-                    //             .swarm
-                    //             .behaviour_mut()
-                    //             .gossipsub
-                    //             .remove_explicit_peer(&peer);
-                    //     }
-                    // }
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Message {
-                    propagation_source: peer_id,
-                    message_id: id,
-                    message,
-                })) => {
-                    println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
-                    
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Kademlia(KademliaEvent::OutboundQueryCompleted{
-                     id, 
-                     result:QueryResult::GetClosestPeers(Ok(GetClosestPeersOk {peers,.. })),
-                        .. },
-                ))=>{
-                    let _ = self
-                        .pending_get_closest_peers
-                        .remove(&id)
-                        .expect("Completed query to be previously pending.")
-                        .send(peers);
-                    
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Kademlia(
-                    KademliaEvent::OutboundQueryCompleted {
-                        id,
-                        result: QueryResult::StartProviding(_),
-                        ..
-                    },
-                )) => {
-                    println!("{:?}",self.pending_start_providing);
-                    let sender: oneshot::Sender<()> = self
-                        .pending_start_providing
-                        .remove(&id)
-                        .expect("Completed query to be previously pending.");
-                    let _ = sender.send(());
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Kademlia(
-                    KademliaEvent::OutboundQueryCompleted {
-                        id,
-                        result: QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })),
-                        ..
-                    },
-                )) => {
-                    let _ = self
-                        .pending_get_providers
-                        .remove(&id)
-                        .expect("Completed query to be previously pending.")
-                        .send(providers);
-                }
-                SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {}
-                SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
-                    RequestResponseEvent::Message { message, .. },
-                )) => match message {
-                    RequestResponseMessage::Request {
-                        request, channel, ..
-                    } => {
-                        self.event_sender
-                            .send(Event::InboundRequest {
-                                request: request.0,
-                                channel,
-                            })
-                            .await
-                            .expect("Event receiver not to be dropped.");
-                    }
-                    RequestResponseMessage::Response {
-                        request_id,
-                        response,
-                    } => {
-                        let _ = self
-                            .pending_request
-                            .remove(&request_id)
-                            .expect("Request to still be pending.")
-                            .send(Ok(response.0));
-                            // don't wrap it in an Ok - or do
-                            // send the whole response
-                    }
+    pub async fn run(mut self) {
+        loop {
+            futures::select! {
+                event = self.swarm.next() => self.handle_event(event.expect("Swarm stream to be infinite.")).await  ,
+                command = self.command_receiver.next() => match command {
+                    Some(c) => self.handle_command(c).await,
+                    // Command channel closed, thus shutting down the network event loop.
+                    None=>  return,
                 },
-                SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
-                    RequestResponseEvent::OutboundFailure {
-                        request_id, error, ..
-                    },
-                )) => {
+            }
+        }
+    }
+
+    async fn handle_event(
+        &mut self,
+        event: SwarmEvent<
+            ComposedEvent,
+            EitherError<
+                EitherError<
+                    EitherError<ConnectionHandlerUpgrErr<io::Error>, io::Error>,
+                    void::Void,
+                >,
+                GossipsubHandlerError,
+            >,
+        >,
+    ) {
+        match event {
+            SwarmEvent::Behaviour(ComposedEvent::Mdns(MdnsEvent::Discovered(discovered_list))) => {
+                for (peer, addr) in discovered_list {
+                    self.swarm.behaviour_mut().kademlia.add_address(&peer, addr);
+                    println!("added: {:?}", peer);
+                    self.swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .add_explicit_peer(&peer);
+                }
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Mdns(MdnsEvent::Expired(expired_list))) => {
+                // for (peer, _addr) in expired_list {
+                //     if !self.swarm.behaviour_mut().mdns.has_node(&peer) {
+                //         self
+                //             .swarm
+                //             .behaviour_mut()
+                //             .kademlia
+                //             .remove_peer(&peer);
+                //         self
+                //             .swarm
+                //             .behaviour_mut()
+                //             .gossipsub
+                //             .remove_explicit_peer(&peer);
+                //     }
+                // }
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Message {
+                propagation_source: peer_id,
+                message_id: id,
+                message,
+            })) => {
+                println!(
+                    "Got message: {} with id: {} from peer: {:?}",
+                    String::from_utf8_lossy(&message.data),
+                    id,
+                    peer_id
+                );
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryCompleted {
+                    id,
+                    result: QueryResult::GetClosestPeers(Ok(GetClosestPeersOk { peers, .. })),
+                    ..
+                },
+            )) => {
+                let _ = self
+                    .pending_get_closest_peers
+                    .remove(&id)
+                    .expect("Completed query to be previously pending.")
+                    .send(peers);
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryCompleted {
+                    id,
+                    result: QueryResult::StartProviding(_),
+                    ..
+                },
+            )) => {
+                println!("{:?}", self.pending_start_providing);
+                let sender: oneshot::Sender<()> = self
+                    .pending_start_providing
+                    .remove(&id)
+                    .expect("Completed query to be previously pending.");
+                let _ = sender.send(());
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                KademliaEvent::OutboundQueryCompleted {
+                    id,
+                    result: QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })),
+                    ..
+                },
+            )) => {
+                let _ = self
+                    .pending_get_providers
+                    .remove(&id)
+                    .expect("Completed query to be previously pending.")
+                    .send(providers);
+            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {}
+            SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
+                RequestResponseEvent::Message { message, .. },
+            )) => match message {
+                RequestResponseMessage::Request {
+                    request, channel, ..
+                } => {
+                    self.event_sender
+                        .send(Event::InboundRequest {
+                            request: request.0,
+                            channel,
+                        })
+                        .await
+                        .expect("Event receiver not to be dropped.");
+                }
+                RequestResponseMessage::Response {
+                    request_id,
+                    response,
+                } => {
                     let _ = self
                         .pending_request
                         .remove(&request_id)
                         .expect("Request to still be pending.")
-                        .send(Err(Box::new(error)));
+                        .send(Ok(response.0));
+                    // don't wrap it in an Ok - or do
+                    // send the whole response
                 }
-                SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
-                    RequestResponseEvent::ResponseSent { .. },
-                )) => {}
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    let local_peer_id = *self.swarm.local_peer_id();
-                    println!(
-                        "Local node is listening on {:?}",
-                        address.with(Protocol::P2p(local_peer_id.into()))
-                    );
-                }
-                SwarmEvent::IncomingConnection { .. } => {}
-                SwarmEvent::ConnectionEstablished {
-                    peer_id, endpoint, ..
-                } => {
-                    if endpoint.is_dialer() {
-                        if let Some(sender) = self.pending_dial.remove(&peer_id) {
-                            let _ = sender.send(Ok(()));
-                        }
-                    }
-                }
-                SwarmEvent::ConnectionClosed { .. } => {}
-                SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                    if let Some(peer_id) = peer_id {
-                        if let Some(sender) = self.pending_dial.remove(&peer_id) {
-                            let _ = sender.send(Err(Box::new(error)));
-                        }
-                    }
-                }
-                SwarmEvent::IncomingConnectionError { .. } => {}
-                SwarmEvent::Dialing(peer_id) => println!("Dialing {}", peer_id),
-                e => panic!("{:?}", e),
+            },
+            SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
+                RequestResponseEvent::OutboundFailure {
+                    request_id, error, ..
+                },
+            )) => {
+                let _ = self
+                    .pending_request
+                    .remove(&request_id)
+                    .expect("Request to still be pending.")
+                    .send(Err(Box::new(error)));
             }
-        }
-
-
-        // ------------------------------------------------------
-        // network receiving from the application 
-        async fn handle_command(&mut self, command: Command) {
-            match command {
-                Command::StartListening { addr, sender } => {
-                    let _ = match self.swarm.listen_on(addr) {
-                        Ok(_) => sender.send(Ok(())),
-                        Err(e) => sender.send(Err(Box::new(e))),
-                    };
+            SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
+                RequestResponseEvent::ResponseSent { .. },
+            )) => {}
+            SwarmEvent::NewListenAddr { address, .. } => {
+                let local_peer_id = *self.swarm.local_peer_id();
+                println!(
+                    "Local node is listening on {:?}",
+                    address.with(Protocol::P2p(local_peer_id.into()))
+                );
+            }
+            SwarmEvent::IncomingConnection { .. } => {}
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
+                if endpoint.is_dialer() {
+                    if let Some(sender) = self.pending_dial.remove(&peer_id) {
+                        let _ = sender.send(Ok(()));
+                    }
                 }
-                Command::Dial {
-                    peer_id,
-                    peer_addr,
-                    sender,
-                } => {
-                    if self.pending_dial.contains_key(&peer_id) {
-                        todo!("Already dialing peer.");
-                    } else {
-                        self.swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, peer_addr.clone());
-                        match self
-                            .swarm
-                            .dial(peer_addr.with(Protocol::P2p(peer_id.into())))
-                        {
-                            Ok(()) => {
-                                self.pending_dial.insert(peer_id, sender);
-                            }
-                            Err(e) => {
-                                let _ = sender.send(Err(Box::new(e)));
-                            }
+            }
+            SwarmEvent::ConnectionClosed { .. } => {}
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                if let Some(peer_id) = peer_id {
+                    if let Some(sender) = self.pending_dial.remove(&peer_id) {
+                        let _ = sender.send(Err(Box::new(error)));
+                    }
+                }
+            }
+            SwarmEvent::IncomingConnectionError { .. } => {}
+            SwarmEvent::Dialing(peer_id) => println!("Dialing {}", peer_id),
+            e => panic!("{:?}", e),
+        }
+    }
+
+    // ------------------------------------------------------
+    // network receiving from the application
+    async fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::StartListening { addr, sender } => {
+                let _ = match self.swarm.listen_on(addr) {
+                    Ok(_) => sender.send(Ok(())),
+                    Err(e) => sender.send(Err(Box::new(e))),
+                };
+            }
+            Command::Dial {
+                peer_id,
+                peer_addr,
+                sender,
+            } => {
+                if self.pending_dial.contains_key(&peer_id) {
+                    todo!("Already dialing peer.");
+                } else {
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, peer_addr.clone());
+                    match self
+                        .swarm
+                        .dial(peer_addr.with(Protocol::P2p(peer_id.into())))
+                    {
+                        Ok(()) => {
+                            self.pending_dial.insert(peer_id, sender);
+                        }
+                        Err(e) => {
+                            let _ = sender.send(Err(Box::new(e)));
                         }
                     }
                 }
-                Command::StartProviding { file_name, sender } => {
-                    let query_id = self
-                        .swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .start_providing(file_name.into_bytes().into())
-                        .expect("No store error.");
-                    self.pending_start_providing.insert(query_id, sender);
-                }
-                Command::GetProviders { file_name, sender } => {
-                    let query_id = self
-                        .swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .get_providers(file_name.into_bytes().into());
-                    self.pending_get_providers.insert(query_id, sender);
-                }
-                Command::GetClosestPeers{id,sender}=>{
-                    
-                    let query_id = self
-                        .swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .get_closest_peers(id);
-                    self.pending_get_closest_peers.insert(query_id, sender);
-                }
-                Command::Request { peer,request,sender, } => {
-                    let request= serde_json::to_string(&request).unwrap();
-                    let request_id = self
-                        .swarm
-                        .behaviour_mut()
-                        .request_response
-                        .send_request(&peer, GenericRequest(request));
-                    self.pending_request.insert(request_id, sender);
-                }
-                Command::Respond {response, channel } => {
+            }
+            Command::StartProviding { file_name, sender } => {
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .start_providing(file_name.into_bytes().into())
+                    .expect("No store error.");
+                self.pending_start_providing.insert(query_id, sender);
+            }
+            Command::GetProviders { file_name, sender } => {
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .get_providers(file_name.into_bytes().into());
+                self.pending_get_providers.insert(query_id, sender);
+            }
+            Command::GetClosestPeers { id, sender } => {
+                let query_id = self.swarm.behaviour_mut().kademlia.get_closest_peers(id);
+                self.pending_get_closest_peers.insert(query_id, sender);
+            }
+            Command::Request {
+                peer,
+                request,
+                sender,
+            } => {
+                let request = serde_json::to_string(&request).unwrap();
+                let request_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_request(&peer, GenericRequest(request));
+                self.pending_request.insert(request_id, sender);
+            }
+            Command::Respond { response, channel } => {
                 let response = serde_json::to_string(&response).unwrap();
                 self.swarm
                     .behaviour_mut()
                     .request_response
                     .send_response(channel, GenericResponse(response))
                     .expect("Connection to peer to be still open.");
-                }
+            }
 
-                Command::BootRoot {up_root, sender} => {
-                    let query_id = self
-                        .swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .start_providing(up_root.into_bytes().into())
-                        .expect("No store error.");
-                    self.pending_start_providing.insert(query_id,sender);
-                },
-
+            Command::BootRoot { up_root, sender } => {
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .start_providing(up_root.into_bytes().into())
+                    .expect("No store error.");
+                self.pending_start_providing.insert(query_id, sender);
             }
         }
     }
+}
 
-    #[derive(NetworkBehaviour)]
-    #[behaviour(out_event = "ComposedEvent")]
-    struct ComposedBehaviour {
-        request_response: RequestResponse<GenericExchangeCodec>,
-        kademlia: Kademlia<MemoryStore>,
-        mdns: Mdns,
-        gossipsub: gossipsub::Gossipsub,
+#[derive(NetworkBehaviour)]
+#[behaviour(out_event = "ComposedEvent")]
+struct ComposedBehaviour {
+    request_response: RequestResponse<GenericExchangeCodec>,
+    kademlia: Kademlia<MemoryStore>,
+    mdns: Mdns,
+    gossipsub: gossipsub::Gossipsub,
+}
+
+#[derive(Debug)]
+enum ComposedEvent {
+    RequestResponse(RequestResponseEvent<GenericRequest, GenericResponse>),
+    Kademlia(KademliaEvent),
+    Mdns(MdnsEvent),
+    Gossipsub(GossipsubEvent),
+}
+
+impl From<RequestResponseEvent<GenericRequest, GenericResponse>> for ComposedEvent {
+    fn from(event: RequestResponseEvent<GenericRequest, GenericResponse>) -> Self {
+        ComposedEvent::RequestResponse(event)
     }
+}
 
-    #[derive(Debug)]
-    enum ComposedEvent {
-        RequestResponse(RequestResponseEvent<GenericRequest, GenericResponse>),
-        Kademlia(KademliaEvent),
-        Mdns(MdnsEvent),
-        Gossipsub(GossipsubEvent),
+impl From<KademliaEvent> for ComposedEvent {
+    fn from(event: KademliaEvent) -> Self {
+        ComposedEvent::Kademlia(event)
     }
+}
 
-    impl From<RequestResponseEvent<GenericRequest, GenericResponse>> for ComposedEvent {
-        fn from(event: RequestResponseEvent<GenericRequest, GenericResponse>) -> Self {
-            ComposedEvent::RequestResponse(event)
-        }
+impl From<MdnsEvent> for ComposedEvent {
+    fn from(event: MdnsEvent) -> Self {
+        ComposedEvent::Mdns(event)
     }
-
-    impl From<KademliaEvent> for ComposedEvent {
-        fn from(event: KademliaEvent) -> Self {
-            ComposedEvent::Kademlia(event)
-        }
+}
+impl From<GossipsubEvent> for ComposedEvent {
+    fn from(event: GossipsubEvent) -> Self {
+        ComposedEvent::Gossipsub(event)
     }
+}
+//#[derive(Debug)]
 
-    impl From<MdnsEvent> for ComposedEvent {
-        fn from(event: MdnsEvent) -> Self {
-            ComposedEvent::Mdns(event)
-        }
+enum Command {
+    StartListening {
+        addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
+    },
+    Dial {
+        peer_id: PeerId,
+        peer_addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
+    },
+    StartProviding {
+        file_name: String,
+        sender: oneshot::Sender<()>,
+    },
+    GetProviders {
+        file_name: String,
+        sender: oneshot::Sender<HashSet<PeerId>>,
+    },
+    GetClosestPeers {
+        id: PeerId,
+        sender: oneshot::Sender<Vec<PeerId>>,
+    },
+    Request {
+        peer: PeerId,
+        request: GeneralRequest,
+        sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
+    },
+    Respond {
+        response: GeneralResponse,
+        channel: ResponseChannel<GenericResponse>,
+    },
+    BootRoot {
+        up_root: String,
+        sender: oneshot::Sender<()>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Event {
+    InboundRequest {
+        request: String,
+        channel: ResponseChannel<GenericResponse>,
+    },
+}
+
+// Simple file exchange protocol
+
+#[derive(Debug, Clone)]
+struct GenericProtocol();
+#[derive(Clone)]
+struct GenericExchangeCodec();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GenericRequest(String);
+#[derive(Debug, Clone, PartialEq, Eq)]
+
+pub struct GenericResponse(String);
+// change the type from String to MyType
+
+impl ProtocolName for GenericProtocol {
+    fn protocol_name(&self) -> &[u8] {
+        "/lease-exchange/1".as_bytes()
     }
-    impl From<GossipsubEvent> for ComposedEvent {
-        fn from(event: GossipsubEvent) -> Self {
-            ComposedEvent::Gossipsub(event)
-        }
-    }
-    //#[derive(Debug)]
-   
-    enum Command {
-        StartListening {
-            addr: Multiaddr,
-            sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
-        },
-        Dial {
-            peer_id: PeerId,
-            peer_addr: Multiaddr,
-            sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
-        },
-        StartProviding {
-            file_name: String,
-            sender: oneshot::Sender<()>,
-        },
-        GetProviders {
-            file_name: String,
-            sender: oneshot::Sender<HashSet<PeerId>>,
-        },
-        GetClosestPeers{
-            id: PeerId,
-            sender: oneshot::Sender<Vec<PeerId>>,
-        },
-        Request {
-            peer: PeerId,
-            request: GeneralRequest,
-            sender: oneshot::Sender<Result<String, Box<dyn Error + Send>>>,
-        },
-        Respond {
-            response: GeneralResponse,
-            channel: ResponseChannel<GenericResponse>,
-        },
-        BootRoot {
-            up_root: String,
-            sender: oneshot::Sender<()>,
-        }, 
-       
+}
 
-    }
+#[async_trait]
+impl RequestResponseCodec for GenericExchangeCodec {
+    type Protocol = GenericProtocol;
+    type Request = GenericRequest;
+    type Response = GenericResponse;
 
-    #[derive(Debug)]
-    pub enum Event {
-        InboundRequest {
-            request: String,
-            channel: ResponseChannel<GenericResponse>,
-        }
-    }
+    async fn read_request<T>(
+        &mut self,
+        _: &GenericProtocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let vec = read_length_prefixed(io, 1_000_000).await?;
 
-    
-  
-    
-    // Simple file exchange protocol
-
-   
-    #[derive(Debug, Clone)]
-    struct GenericProtocol();
-    #[derive(Clone)]
-    struct GenericExchangeCodec();
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct GenericRequest(String);
-    #[derive(Debug, Clone, PartialEq, Eq)]
-
-    
-    pub struct GenericResponse(String);
-    // change the type from String to MyType
-
-    impl ProtocolName for GenericProtocol {
-        fn protocol_name(&self) -> &[u8] {
-            "/lease-exchange/1".as_bytes()
-        }
-    }
-
-    #[async_trait]
-    impl RequestResponseCodec for GenericExchangeCodec {
-        type Protocol = GenericProtocol;
-        type Request = GenericRequest;
-        type Response = GenericResponse;
-
-        async fn read_request<T>(
-            &mut self,
-            _: &GenericProtocol,
-            io: &mut T,
-        ) -> io::Result<Self::Request>
-        where
-            T: AsyncRead + Unpin + Send,
-        {
-            let vec = read_length_prefixed(io, 1_000_000).await?;
-
-            if vec.is_empty() {
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
-
-            Ok(GenericRequest(String::from_utf8(vec).unwrap()))
+        if vec.is_empty() {
+            return Err(io::ErrorKind::UnexpectedEof.into());
         }
 
-        async fn read_response<T>(
-            &mut self,
-            _: &GenericProtocol,
-            io: &mut T,
-        ) -> io::Result<Self::Response>
-        where
-            T: AsyncRead + Unpin + Send,
-        {
-            let vec = read_length_prefixed(io, 1_000_000).await?;
-
-            if vec.is_empty() {
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
-
-            Ok(GenericResponse(String::from_utf8(vec).unwrap()))
-        }
-
-        async fn write_request<T>(
-            &mut self,
-            _: &GenericProtocol,
-            io: &mut T,
-            GenericRequest(data): GenericRequest,
-        ) -> io::Result<()>
-        where
-            T: AsyncWrite + Unpin + Send,
-        {
-            write_length_prefixed(io, data).await?;
-            io.close().await?;
-
-            Ok(())
-        }
-
-        async fn write_response<T>(
-            &mut self,
-            _: &GenericProtocol,
-            io: &mut T,
-            GenericResponse(data): GenericResponse,
-        ) -> io::Result<()>
-        where
-            T: AsyncWrite + Unpin + Send,
-        {
-            write_length_prefixed(io, data).await?;
-            io.close().await?;
-
-            Ok(())
-        }
+        Ok(GenericRequest(String::from_utf8(vec).unwrap()))
     }
+
+    async fn read_response<T>(
+        &mut self,
+        _: &GenericProtocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        let vec = read_length_prefixed(io, 1_000_000).await?;
+
+        if vec.is_empty() {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+
+        Ok(GenericResponse(String::from_utf8(vec).unwrap()))
+    }
+
+    async fn write_request<T>(
+        &mut self,
+        _: &GenericProtocol,
+        io: &mut T,
+        GenericRequest(data): GenericRequest,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        write_length_prefixed(io, data).await?;
+        io.close().await?;
+
+        Ok(())
+    }
+
+    async fn write_response<T>(
+        &mut self,
+        _: &GenericProtocol,
+        io: &mut T,
+        GenericResponse(data): GenericResponse,
+    ) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        write_length_prefixed(io, data).await?;
+        io.close().await?;
+
+        Ok(())
+    }
+}
