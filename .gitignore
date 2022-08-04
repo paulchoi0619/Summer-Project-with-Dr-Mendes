@@ -1,2 +1,105 @@
-target
+Last login: Tue Aug  2 03:44:15 on ttys002
+-bash: export: `=': not a valid identifier
+-bash: export: `/Library/Frameworks/Python.framework/Versions/3.4/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Library/TeX/texbin:/opt/X11/bin:/Library/Apple/usr/bin:/usr/local/smlnj/bin': not a valid identifier
+-bash: ’export: command not found
+-bash: ’export: command not found
+-bash: ’export: command not found
+-bash: ’export: command not found
+-bash: ’export: command not found
+
+The default interactive shell is now zsh.
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+MacBook-Air-19:~ Polly$ ls
+Applications                           iCloud Drive (Archive)
+Desktop                                iCloud Drive(아카이브)
+Documents                              int
+Downloads                              int=
+GSChat                                 js-libp2p
+Library                                node_modules
+Movies                                 opt
+Music                                  package-lock.json
+Pictures                               package.json
+Public                                 projects
+Sites                                  real*real
+book.pdf                               rust-project
+bool                                   sorting.c
+bubblesort.s                           true
+example-.io-game                       vcpkg
+false
+MacBook-Air-19:~ Polly$ cd Documents
+MacBook-Air-19:Documents Polly$ cd GitHub
+MacBook-Air-19:GitHub Polly$ ls
+-languagegame
+250_In-Class_Activities_S21
+250_final-paulchoi0619
+250_review2-paulchoi0619
+250_review3-paulchoi0619
+250_review4-paulchoi0619
+250_review5-paulchoi0619
+ATTPC_Extraction
+Bodymap
+Capstone
+Group-1-Project
+Group-B
+Summer-Project-with-Dr-Mendes
+alpha-davidson.github.io
+arithmetic.circ
+demo-assignment-polly0619
+fantasy-football-kick
+giphy-api-example
+html-js-drills
+hw0-simple-stats-polly0619
+hw1-assembler-northern-idaho-ground-squirrel
+hw2-binary-northern-idaho-ground-squirrel
+hw3-alu-omilteme-cottontail
+hw4-cpu-omilteme-cottontail
+hw5-assembly-omilteme-cottontail
+hw6-schelling-pantropical-spotted-dolphin
+hw7-strings-pantropical-spotted-dolphin
+hw8-catshell-pantropical-spotted-dolphin
+intro-command-line
+leasesharing
+milestones-html
+orientation
+pointnet2-tensorflow2
+project-js-simon
+review-1-paulchoi0619
+rpslsBot
+rust-libp2p
+vcpkg
+MacBook-Air-19:GitHub Polly$ cd Summer-Project-with-Dr-Mendes
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ touch .gitignore
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ touch .gitignore
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ ls
+Cargo.lock Cargo.toml README.md  src        target
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ touch gitignore
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ ls
+Cargo.lock    README.md     src
+Cargo.toml    gitignore.txt target
+MacBook-Air-19:Summer-Project-with-Dr-Mendes Polly$ vim gitignore
+
 Cargo.lock
+target
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+-- INSERT --
