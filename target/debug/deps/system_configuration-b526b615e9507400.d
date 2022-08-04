@@ -1,9 +1,0 @@
-/Users/Polly/Documents/GitHub/Summer-Project-with-Dr-Mendes/target/debug/deps/system_configuration-b526b615e9507400.rmeta: /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/lib.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/dynamic_store.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_configuration.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_reachability.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/preferences.rs
-
-/Users/Polly/Documents/GitHub/Summer-Project-with-Dr-Mendes/target/debug/deps/system_configuration-b526b615e9507400.d: /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/lib.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/dynamic_store.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_configuration.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_reachability.rs /Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/preferences.rs
-
-/Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/lib.rs:
-/Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/dynamic_store.rs:
-/Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_configuration.rs:
-/Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/network_reachability.rs:
-/Users/Polly/.cargo/registry/src/github.com-1ecc6299db9ec823/system-configuration-0.5.0/src/preferences.rs:
