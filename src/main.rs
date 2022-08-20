@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 let lease = GeneralRequest::LeaseRequest(key,entry);
                                                
                                                 let providers = network_client.get_providers("root".to_string()).await; 
-
+                                               
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
@@ -195,7 +195,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         _ => (),
                                     }
                                 }
-                                network_client.respond(GeneralResponse::LeaseResponse((network_client_id)),channel).await;
+                                network_client.respond(GeneralResponse::LeaseResponse(network_client_id),channel).await;
                             }
                         
                             GeneralRequest::LeaseRequest(key,entry) => {

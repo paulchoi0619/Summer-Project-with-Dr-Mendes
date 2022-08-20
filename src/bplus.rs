@@ -19,6 +19,9 @@ impl BPTree {
             top_id: id,
         }
     }
+    pub fn get_size(&self) -> usize {
+        self.block_map.keys().len()
+    }
     pub fn remove_block(&mut self, id: BlockId) {
         self.block_map.remove(&id);
     }

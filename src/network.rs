@@ -50,8 +50,9 @@
             }
             None => identity::Keypair::generate_ed25519(),
         };
-        //let topic = Topic::new("size");
+        
         let peer_id = id_keys.public().to_peer_id();
+        let topic = Topic::new("size");
         let message_id_fn = |message: &GossipsubMessage| {
             let mut s = DefaultHasher::new();
             message.data.hash(&mut s);
@@ -65,8 +66,8 @@
             .build()
             .expect("Valid config");
             
-        let gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys.clone()), gossipsub_config)?;
-        //gossipsub.subscribe(&topic).unwrap();
+        let mut gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(id_keys.clone()), gossipsub_config)?;
+        gossipsub.subscribe(&topic).unwrap();
 
         // Build the Swarm, connecting the lower layer transport logic with the
         // higher layer network behaviour logic.
@@ -88,7 +89,6 @@
 
         let (command_sender, command_receiver) = mpsc::channel(0);
         let (event_sender, event_receiver) = mpsc::channel(0);
-        // let mut lease_map = HashMap::new();
 
 
         Ok((
@@ -293,6 +293,12 @@
                     println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
                     
                 }
+                SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Subscribed 
+                    { peer_id, 
+                    topic })) => {
+                        println!("Subscribed to: {} from peer: {:?}", topic,peer_id);
+                }
+
                 SwarmEvent::Behaviour(ComposedEvent::Kademlia(KademliaEvent::OutboundQueryCompleted{
                      id, 
                      result:QueryResult::GetClosestPeers(Ok(GetClosestPeersOk {peers,.. })),
@@ -312,7 +318,8 @@
                         ..
                     },
                 )) => {
-                    println!("{:?}",self.pending_start_providing);
+                    
+                    //println!("{:?}",self.pending_start_providing);
                     let sender: oneshot::Sender<()> = self
                         .pending_start_providing
                         .remove(&id)
@@ -326,6 +333,7 @@
                         ..
                     },
                 )) => {
+                   
                     let _ = self
                         .pending_get_providers
                         .remove(&id)
