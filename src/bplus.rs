@@ -45,20 +45,20 @@ impl BPTree {
                 if k <= current.keys[i] {
                     let new_id = current.children[i];
                     if self.block_map.contains_key(&new_id) {
-                        return self.find(new_id, k);
+                        return self.find(new_id, k); //if the child id is in block map, do a recursive search
                     } else {
-                        return new_id;
+                        return block_id; //else return the id of the internal block
                     }
                 }
             }
-            let new_id = current.children[current.keys.len() - 1];
+            let new_id = current.children[current.keys.len() - 1]; //retreive the last child id
             if self.block_map.contains_key(&new_id) {
-                return self.find(new_id, k);
+                return self.find(new_id, k); //if the child is in block map, continue with search
             } else {
-                return new_id;
+                return block_id; //else return the internal block id
             }
         }
-        return block_id;
+        return block_id; //return the leaf block id
     }
     pub fn contains_block(&mut self, block_id: BlockId) -> bool {
         self.block_map.contains_key(&block_id)
@@ -83,7 +83,7 @@ impl BPTree {
 
         if leaf.keys.len() == SIZE {
             let mut newleaf = leaf.clone(); //create a new leaf to split and update block map
-            let result = newleaf.split_leaf_block(&mut self.block_map);
+            let result = newleaf.split_leaf_block(&mut self.block_map); //splits the block and adds them to the block map
             return self.insert_on_parent(result.left, result.divider_key, result.right);
         }
         InsertResult::Complete
@@ -107,7 +107,7 @@ impl BPTree {
             return InsertResult::Complete;
         } else {
             if !self.block_map.contains_key(&leftblock.parent) {
-                return InsertResult::InsertOnRemoteParent(leftblock.parent, key, right);
+                return InsertResult::InsertOnRemoteParent(leftblock.parent, key, right); //indicates insertion of child on remote parent
             }
             let mut parent = self.block_map.get_mut(&leftblock.parent).unwrap().clone(); //retrieve parent block
             parent.add_child(key, right); //add right block to the parent

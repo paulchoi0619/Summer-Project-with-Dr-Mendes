@@ -12,7 +12,7 @@ use serde_json;
 use std::hash::{Hash, Hasher};
 use serde::{Serialize, Deserialize};
 mod events;
-use events::{handle_lease_request,handle_lease_requests,handle_insert_on_remote_parent,handle_migrate};
+use events::{handle_lease_request,handle_insert_on_remote_parent,handle_migrate};
 mod network;
 mod bplus;
 use bplus::{BPTree,Block,Entry,Key, BlockId};
@@ -31,7 +31,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let peer: Option<Multiaddr> = None;
 
     let (mut network_client, mut network_events, network_event_loop, network_client_id) =
-    // network::new(opt.secret_key_seed).await?;
     network::new(secret_key_seed).await?;
 
     println!("my id: {:?}", network_client_id);
@@ -72,8 +71,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut block = Block::new();
     block.set_block_id();
     let mut bp_tree = BPTree::new(block);
-    let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
-    let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
+    let mut is_root = false; 
+    //let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
+    //let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
+    
     // to be found in the network with the specific name
     loop {
         tokio::select! { 
@@ -97,7 +98,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             Ok(key) =>{
                                                 let entry = Entry::new(network_client_id,key);
                                                 let lease = GeneralRequest::LeaseRequest(key,entry);
-                                               
+                                            if is_root{ //if this peer is the node
+                                                }
+                                            else{
                                                 let providers = network_client.get_providers("root".to_string()).await; 
                                                
                                                 if providers.is_empty() {
@@ -121,6 +124,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 Err(err) => println!("Error {:?}", err),
                                             };
                                             }
+                                            }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
                                             }
@@ -137,6 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let providers = network_client.get_providers("root".to_string()).await;
                             if providers.is_empty() {
                                 network_client.boot_root().await;
+                                is_root = true;
                             } 
                             else{
                                 println!("root already exists!")
@@ -185,21 +190,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Some(network::Event::InboundRequest {request, channel }) => {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
-                            GeneralRequest::LeaseRequests(lease_requests) => {
-                                for lease_request in lease_requests{
-                                    match lease_request{
-                                        GeneralRequest::LeaseRequest(key,entry) => {
-                                           
-                                        handle_lease_requests(key, entry, &mut bp_tree,&block_migration,&mut commands,&mut network_client).await;
-                                        },
-                                        _ => (),
-                                    }
-                                }
-                                network_client.respond(GeneralResponse::LeaseResponse(network_client_id),channel).await;
-                            }
                         
                             GeneralRequest::LeaseRequest(key,entry) => {
-                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&block_migration,&mut commands,&mut network_client).await;
+                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
                             GeneralRequest::MigrateRequest(block)=>{
                                 handle_migrate(block,&mut bp_tree,channel,&mut network_client).await;
@@ -208,6 +201,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
                                 handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
+                            // GeneralRequest::LeaseRequests(lease_requests) => {
+                            //     for lease_request in lease_requests{
+                            //         match lease_request{
+                            //             GeneralRequest::LeaseRequest(key,entry) => {
+                                           
+                            //             handle_lease_requests(key, entry, &mut bp_tree,&block_migration,&mut commands,&mut network_client).await;
+                            //             },
+                            //             _ => (),
+                            //         }
+                            //     }
+                            //     network_client.respond(GeneralResponse::LeaseResponse(network_client_id),channel).await;
+                            // }
                         }                       
                         
                     }
@@ -254,7 +259,7 @@ struct Opt {
 
 #[derive(Debug,Serialize,Deserialize,Clone,Hash)]
 pub enum GeneralRequest{
-    LeaseRequests(Vec<GeneralRequest>),
+    //LeaseRequests(Vec<GeneralRequest>),
     LeaseRequest (Key,Entry),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key,BlockId),
