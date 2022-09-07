@@ -198,6 +198,14 @@
             receiver.await.expect("Sender not to be dropped.");
         }
 
+        pub async fn publish_size(&mut self,topic: Topic, size: usize){
+            //let size= serde_json::to_string(&size).unwrap();
+            let (sender, receiver) = oneshot::channel();
+            self.sender
+                .send(Command::Publish {topic,size,sender})
+                .await
+                .expect("Command receiver not to be dropped.");
+        } 
        
 
     }
@@ -319,7 +327,7 @@
                     },
                 )) => {
                     
-                    //println!("{:?}",self.pending_start_providing);
+                    
                     let sender: oneshot::Sender<()> = self
                         .pending_start_providing
                         .remove(&id)
@@ -333,7 +341,7 @@
                         ..
                     },
                 )) => {
-                   
+                    println!("Kademlia Event");
                     let _ = self
                         .pending_get_providers
                         .remove(&id)
@@ -501,7 +509,15 @@
                         .start_providing(up_root.into_bytes().into())
                         .expect("No store error.");
                     self.pending_start_providing.insert(query_id,sender);
-                },
+                }
+                Command::Publish {topic,size,sender}=>{
+                    let size= serde_json::to_string(&size).unwrap();
+                    let query_id = self
+                        .swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .publish(topic.clone(), size);
+                }
 
             }
         }
@@ -583,7 +599,11 @@
             up_root: String,
             sender: oneshot::Sender<()>,
         }, 
-       
+        Publish{
+            topic: Topic,
+            size: usize,
+            sender: oneshot::Sender<()>,
+        },
 
     }
 
