@@ -5,6 +5,7 @@ use tokio::io::AsyncBufReadExt;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::multiaddr::Protocol;
+use rand::seq::SliceRandom;
 use std::collections::{HashSet,HashMap};
 use std::error::Error;
 use std::path::PathBuf;
@@ -98,11 +99,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             Ok(key) =>{
                                                 let entry = Entry::new(network_client_id,key);
                                                 let lease = GeneralRequest::LeaseRequest(key,entry);
-                                            if is_root{ //if this peer is the node
-                                                }
-                                            else{
+                                            // if is_root{ //if this peer is the node
+                                            //     }
+                                           
                                                 let providers = network_client.get_providers("root".to_string()).await; 
-                                               
+                                                println!("A2 Back from await");
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
@@ -123,7 +124,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
-                                            }
+                                            
                                             }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
@@ -148,35 +149,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         cmd if cmd.starts_with("migrate") => {
-                            // let right_block = bp_tree.get_right_block();
-                            // if right_block!= 0{ //if it's not default blockid
-                            //     let peers = network_client.get_closest_peer(network_client_id).await;
-                            //     if peers.is_empty(){
-                            //         return Err(format!("Could not find peer.").into());
-                            //     }
-                            //     let peer = peers[0];
-                            //     let block = bp_tree.get_block(right_block).clone();
-                            //     let request = GeneralRequest::MigrateRequest(block);
-                            //     block_migration.insert(right_block); //indicating that this block is in the process of migration
-                            //     let result = network_client.request(peer,request).await;
-                            //     match result{
-                            //         Ok(str) => 
-                            //         {println!("Here {:?}", str);
-                            //         block_migration.remove(&right_block); //migration is complete
-                            //         bp_tree.remove_block(right_block); // remove block from block map
-                            //         if commands.contains_key(&right_block){
-                            //         let lease_commands = commands.remove(&right_block).unwrap().clone();
-                            //         let lease_requests = GeneralRequest::LeaseRequests(lease_commands);
-                            //         network_client.request(peer,lease_requests).await; //dumping all the commands 
-                            //         bp_tree.reset_right_block();
-                            //     }
-                            //     },
-                            //         Err(err) => println!("Error {:?}", err),
-                            //     }
-                            // }
-                            // else{
-                            //     println!("No block to migrate!")
-                            // }
+                                let peers = network_client.get_closest_peer(network_client_id).await;
+                                if peers.is_empty(){
+                                    return Err(format!("Could not find peer to migrate block.").into());
+                                }
+                                let peer = peers.choose(&mut rand::thread_rng()).unwrap();
+                                let id = bp_tree.get_top_id();
+                                let block = bp_tree.get_block(id).clone();
+                                let migrate_request = GeneralRequest::MigrateRequest(block);
+                                let result = network_client.request(*peer,migrate_request).await;
+                                match result{
+                                    Ok(str) => {
+                                        let response:GeneralResponse= serde_json::from_str(&str).unwrap();
+                                        println!("New Provider {:?}", response);
+                                    },
+                                    Err(err) => println!("Error {:?}", err),
+                                };
+                                
+                                
+                            
                         }
 
                         _ => println!("unknown command\n"),
@@ -195,24 +186,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
                             GeneralRequest::MigrateRequest(block)=>{
-                                handle_migrate(block,&mut bp_tree,channel,&mut network_client).await;
+                                handle_migrate(block,&mut bp_tree,channel,&mut network_client,network_client_id).await;
                                 
                             }
                             GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
                                 handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
-                            // GeneralRequest::LeaseRequests(lease_requests) => {
-                            //     for lease_request in lease_requests{
-                            //         match lease_request{
-                            //             GeneralRequest::LeaseRequest(key,entry) => {
-                                           
-                            //             handle_lease_requests(key, entry, &mut bp_tree,&block_migration,&mut commands,&mut network_client).await;
-                            //             },
-                            //             _ => (),
-                            //         }
-                            //     }
-                            //     network_client.respond(GeneralResponse::LeaseResponse(network_client_id),channel).await;
-                            // }
                         }                       
                         
                     }
@@ -259,7 +238,6 @@ struct Opt {
 
 #[derive(Debug,Serialize,Deserialize,Clone,Hash)]
 pub enum GeneralRequest{
-    //LeaseRequests(Vec<GeneralRequest>),
     LeaseRequest (Key,Entry),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key,BlockId),
@@ -267,7 +245,7 @@ pub enum GeneralRequest{
 #[derive(Debug,Serialize,Deserialize,Clone,Hash)]
 pub enum GeneralResponse{
     LeaseResponse(PeerId),
-    MigrateResponse,
+    MigrateResponse(PeerId),
     InsertOnRemoteParent(PeerId),
 }
 

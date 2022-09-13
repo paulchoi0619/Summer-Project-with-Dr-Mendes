@@ -4,7 +4,7 @@
     use futures::channel::{mpsc, oneshot};
     use libp2p::core::either::EitherError;
     use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
-    use libp2p::gossipsub::error::GossipsubHandlerError;
+    use libp2p::gossipsub::error::{GossipsubHandlerError, SubscriptionError};
     use libp2p::gossipsub::{GossipsubEvent, MessageAuthenticity, ValidationMode, IdentTopic as Topic, GossipsubMessage, MessageId};
     use libp2p::{identity, gossipsub};
     use libp2p::identity::ed25519;
@@ -197,14 +197,19 @@
                 .expect("Command receiver not to be dropped.");
             receiver.await.expect("Sender not to be dropped.");
         }
-
-        pub async fn publish_size(&mut self,topic: Topic, size: usize){
-            //let size= serde_json::to_string(&size).unwrap();
+        pub async fn subscribe(&mut self,topic: Topic){
+            self.sender
+                .send(Command::Subscribe {topic})
+                .await
+                .expect("Command receiver not to be dropped.");
+        } 
+        pub async fn publish(&mut self,topic: Topic, size: usize){
             let (sender, receiver) = oneshot::channel();
             self.sender
                 .send(Command::Publish {topic,size,sender})
                 .await
                 .expect("Command receiver not to be dropped.");
+            receiver.await.expect("Sender not to be dropped.");
         } 
        
 
@@ -220,6 +225,8 @@
         pending_get_closest_peers: HashMap<QueryId, oneshot::Sender<Vec<PeerId>>>,
         pending_request:
             HashMap<RequestId, oneshot::Sender<Result<String, Box<dyn Error + Send>>>>,
+        pending_publish:
+            HashMap<MessageId,oneshot::Sender<(PeerId,GossipsubMessage)>>,
     }
     impl EventLoop {
         fn new(
@@ -236,6 +243,7 @@
                 pending_get_providers: Default::default(),
                 pending_request: Default::default(),
                 pending_get_closest_peers: Default::default(),
+                pending_publish: Default::default(),
             }
         }
 
@@ -298,7 +306,12 @@
                     message_id: id,
                     message,
                 })) => {
-                    println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
+                    //println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
+                    let _ = self
+                        .pending_publish
+                        .remove(&id)
+                        .expect("Completed")
+                        .send((peer_id,message));
                     
                 }
                 SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Subscribed 
@@ -341,7 +354,7 @@
                         ..
                     },
                 )) => {
-                    println!("Kademlia Event");
+                    println!("B Received GetProvider Response");
                     let _ = self
                         .pending_get_providers
                         .remove(&id)
@@ -467,6 +480,7 @@
                     self.pending_start_providing.insert(query_id, sender);
                 }
                 Command::GetProviders { file_name, sender } => {
+                    println!("A Sent Get Providers Event");
                     let query_id = self
                         .swarm
                         .behaviour_mut()
@@ -510,13 +524,21 @@
                         .expect("No store error.");
                     self.pending_start_providing.insert(query_id,sender);
                 }
+                Command::Subscribe {topic}=>{
+                    self
+                        .swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .subscribe(&topic);
+                }
                 Command::Publish {topic,size,sender}=>{
                     let size= serde_json::to_string(&size).unwrap();
-                    let query_id = self
+                    let message_id = self
                         .swarm
                         .behaviour_mut()
                         .gossipsub
                         .publish(topic.clone(), size);
+                    self.pending_publish.insert(message_id.unwrap(),sender);
                 }
 
             }
@@ -602,9 +624,11 @@
         Publish{
             topic: Topic,
             size: usize,
-            sender: oneshot::Sender<()>,
+            sender: oneshot::Sender<(PeerId,GossipsubMessage)>,
         },
-
+        Subscribe{
+            topic: Topic,
+        }
     }
 
     #[derive(Debug)]

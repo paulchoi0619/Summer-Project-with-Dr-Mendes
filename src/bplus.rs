@@ -37,7 +37,6 @@ impl BPTree {
     pub fn get_block(&mut self, id: BlockId) -> &mut Block {
         self.block_map.get_mut(&id).unwrap()
     }
-
     pub fn find(&self, block_id: BlockId, k: Key) -> BlockId {
         let current = self.block_map.get(&block_id).unwrap();
         if !current.is_leaf {
