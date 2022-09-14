@@ -1,26 +1,28 @@
-use tokio;
 use clap::Parser;
-use tokio::spawn;
-use tokio::io::AsyncBufReadExt;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
+use libp2p::gossipsub::Topic;
 use libp2p::multiaddr::Protocol;
 use rand::seq::SliceRandom;
-use std::collections::{HashSet,HashMap};
-use std::error::Error;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::hash::{Hash, Hasher};
-use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
+use tokio;
+use tokio::io::AsyncBufReadExt;
+use tokio::spawn;
 mod events;
-use events::{handle_lease_request,handle_insert_on_remote_parent,handle_migrate};
-mod network;
+use events::{handle_insert_on_remote_parent, handle_lease_request, handle_migrate};
 mod bplus;
-use bplus::{BPTree,Block,Entry,Key, BlockId};
+mod network;
+use bplus::{BPTree, Block, BlockId, Entry, Key};
+mod gossip_channel;
 
 // run with cargo run -- --secret-key-seed #
 
-#[tokio::main] 
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
@@ -32,17 +34,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let peer: Option<Multiaddr> = None;
 
     let (mut network_client, mut network_events, network_event_loop, network_client_id) =
-    network::new(secret_key_seed).await?;
-
-    println!("my id: {:?}", network_client_id);
+        network::new(secret_key_seed).await?;
+    let (mut gossip_receiver, mut gossip_channel_loop)=
+        gossip_channel::new().await?;
 
     // Spawn the network task for it to run in the background.
     spawn(network_event_loop.run());
+    
+    //spawn gossip channel
+    spawn(gossip_channel_loop.run());
 
     // In case a listen address was provided use it, otherwise listen on any
     // address.
     // match opt.listen_address {
-    match listen_address{
+    match listen_address {
         Some(addr) => network_client
             .start_listening(addr)
             .await
@@ -52,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await
             .expect("Listening not to fail."),
     };
-    
+
     // In case the user provided an address of a peer on the CLI, dial it.
     // if let Some(addr) = opt.peer {
     if let Some(addr) = peer {
@@ -67,19 +72,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    
 
     let mut block = Block::new();
     block.set_block_id();
     let mut bp_tree = BPTree::new(block);
-    let mut is_root = false; 
+    let mut is_root = false;
+
+    let topic = Topic::new("size");
+    network_client.subscribe(topic.clone()).await;
     //let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
     //let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
-    
     // to be found in the network with the specific name
     loop {
-        tokio::select! { 
-            line_option = stdin.next_line() => 
+        tokio::select! {
+            line_option = stdin.next_line() =>
             match line_option {
                 Ok(None) => {break;},
                 Ok(Some(line)) => {
@@ -87,13 +93,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         // "getlease" => list_peers().await,
                         cmd if cmd.starts_with("getlease") => {
                             println!("Type key:");
-                            
+
                             let key= stdin.next_line().await;
                             match key {
                                         Ok(None) => {
                                         println!("Missing Key");
                                         break;},
-                                        Ok(Some(line)) => {   
+                                        Ok(Some(line)) => {
                                         let input = line.parse::<u64>();
                                         match input{
                                             Ok(key) =>{
@@ -101,22 +107,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 let lease = GeneralRequest::LeaseRequest(key,entry);
                                             // if is_root{ //if this peer is the node
                                             //     }
-                                           
-                                                let providers = network_client.get_providers("root".to_string()).await; 
+
+                                                let providers = network_client.get_providers("root".to_string()).await;
                                                 println!("A2 Back from await");
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
                                                 let requests = providers.into_iter().map(|p| {
-                                                    
+
                                                     let mut network_client = network_client.clone();
                                                     let lease = lease.clone();
                                                     async move { network_client.request(p,lease).await }.boxed()
                                                 });
-                                            
+
                                             let lease_info = futures::future::select_ok(requests)
                                                 .await;
-                                        
+
                                             match lease_info{
                                                 Ok(str) => {
                                                     let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
@@ -124,26 +130,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
-                                            
+
                                             }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
                                             }
                                         }
-                                             
+
                                         }
                             Err(_) =>{
                                 println!("Error")
                             }
                         }
-                            
+
                         },
                         cmd if cmd.starts_with("root") => {
                             let providers = network_client.get_providers("root".to_string()).await;
                             if providers.is_empty() {
                                 network_client.boot_root().await;
                                 is_root = true;
-                            } 
+                            }
                             else{
                                 println!("root already exists!")
                             }
@@ -165,9 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     },
                                     Err(err) => println!("Error {:?}", err),
                                 };
-                                
-                                
-                            
+
                         }
 
                         _ => println!("unknown command\n"),
@@ -175,25 +179,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 },
                 Err(_) => print!("Error handing input line: "),
             },
+            gossip = gossip_receiver.next() => match gossip{
+                None => {
+                },
+                Some(_) => {
+                    let size = bp_tree.get_size();
+                    network_client.publish(topic.clone(), size).await;
+                }
+            },
             event = network_events.next() => match event {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
-                        
+
                             GeneralRequest::LeaseRequest(key,entry) => {
                                 handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
                             GeneralRequest::MigrateRequest(block)=>{
                                 handle_migrate(block,&mut bp_tree,channel,&mut network_client,network_client_id).await;
-                                
+
                             }
                             GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
                                 handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id,&mut network_client).await;
                             }
-                        }                       
-                        
+                        }
+
                     }
                 },
         }
@@ -202,20 +214,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
-
-
-
-
-
-
 // internal node extra field: children
-//impl block 
+//impl block
 // search : child if internal node or else entry
 //fn search(searched: Entry) -> Either<Entry, BlockId>
-
-
-
 
 #[derive(Parser, Debug)]
 #[clap(name = "libp2p file sharing example")]
@@ -223,7 +225,6 @@ struct Opt {
     /// Fixed value to generate deterministic peer ID.
     #[clap(long)]
     secret_key_seed: Option<u8>,
-
     // #[clap(long)]
     // peer: Option<Multiaddr>,
 
@@ -234,22 +235,18 @@ struct Opt {
     // argument: CliArgument,
 }
 
-
-
-#[derive(Debug,Serialize,Deserialize,Clone,Hash)]
-pub enum GeneralRequest{
-    LeaseRequest (Key,Entry),
+#[derive(Debug, Serialize, Deserialize, Clone, Hash)]
+pub enum GeneralRequest {
+    LeaseRequest(Key, Entry),
     MigrateRequest(Block),
-    InsertOnRemoteParent(Key,BlockId),
+    InsertOnRemoteParent(Key, BlockId),
 }
-#[derive(Debug,Serialize,Deserialize,Clone,Hash)]
-pub enum GeneralResponse{
+#[derive(Debug, Serialize, Deserialize, Clone, Hash)]
+pub enum GeneralResponse {
     LeaseResponse(PeerId),
     MigrateResponse(PeerId),
     InsertOnRemoteParent(PeerId),
 }
-
-
 
 #[derive(Debug, Parser)]
 enum CliArgument {
@@ -274,5 +271,3 @@ enum CliArgument {
         data: String,
     },
 }
-
-

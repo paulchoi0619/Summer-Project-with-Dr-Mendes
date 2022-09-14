@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
 use libp2p::core::PeerId;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use rand::Rng;
 
 pub struct BPTree {
     block_map: HashMap<Key, Block>,
@@ -106,7 +106,8 @@ impl BPTree {
             return InsertResult::Complete;
         } else {
             if !self.block_map.contains_key(&leftblock.parent) {
-                return InsertResult::InsertOnRemoteParent(leftblock.parent, key, right); //indicates insertion of child on remote parent
+                return InsertResult::InsertOnRemoteParent(leftblock.parent, key, right);
+                //indicates insertion of child on remote parent
             }
             let mut parent = self.block_map.get_mut(&leftblock.parent).unwrap().clone(); //retrieve parent block
             parent.add_child(key, right); //add right block to the parent
