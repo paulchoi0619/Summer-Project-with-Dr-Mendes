@@ -1,8 +1,9 @@
 use clap::Parser;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::gossipsub::Topic;
+use libp2p::gossipsub::{Topic, IdentTopic, TopicHash};
 use libp2p::multiaddr::Protocol;
+use rand::Rng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -35,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (mut network_client, mut network_events, network_event_loop, network_client_id) =
         network::new(secret_key_seed).await?;
-    let (mut gossip_receiver, mut gossip_channel_loop)=
+    let (mut gossip_command, mut gossip_channel_loop)=
         gossip_channel::new().await?;
 
     // Spawn the network task for it to run in the background.
@@ -71,15 +72,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
+    
+
+    let mut block = Block::new(); //initialize block
+    block.set_block_id(); 
+    let mut bp_tree = BPTree::new(block); //bp tree
+    let mut is_root = false; 
+
+    //let mut topics:Vec<TopicHash> = Vec::new();
+    let topic = Topic::new("size"); 
+    network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
+
+    let mut migrate_peer = network_client_id;
+    let mut cur_peer_size = f32::INFINITY as usize;
+
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-
-    let mut block = Block::new();
-    block.set_block_id();
-    let mut bp_tree = BPTree::new(block);
-    let mut is_root = false;
-
-    let topic = Topic::new("size");
-    network_client.subscribe(topic.clone()).await;
     //let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
     //let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
     // to be found in the network with the specific name
@@ -90,7 +97,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Ok(None) => {break;},
                 Ok(Some(line)) => {
                     match line.as_str() {
-                        // "getlease" => list_peers().await,
+                        // cmd if cmd.starts_with("gossip") => {
+                        //     println!("Type topic:");
+                        //     let topic = stdin.next_line().await;
+                        //     match topic {
+                        //         Ok(None) => {
+                        //             println!("Missing");
+                        //             break;
+                        //         },
+                        //         Ok(Some(line)) => {
+                                    
+                        //             let topic = IdentTopic::new(line.as_str());
+                        //             topics.push(topic.hash());
+                        //             network_client.subscribe(topic.clone()).await;
+                        //         },
+                        //         Err(_) =>{
+                        //             println!("Error")
+                        //         }
+
+                        //     }
+                        // },
                         cmd if cmd.starts_with("getlease") => {
                             println!("Type key:");
 
@@ -179,11 +205,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 },
                 Err(_) => print!("Error handing input line: "),
             },
-            gossip = gossip_receiver.next() => match gossip{
+            gossip = gossip_command.next() => match gossip{
                 None => {
                 },
                 Some(_) => {
-                    let size = bp_tree.get_size();
+                    //let size = bp_tree.get_size();
+                    let num = rand::thread_rng().gen_range(0,100);
+                    let size = num as usize;
+                    // if topics.len()>0{
+                    //let topic = Topic::new(topics[0].as_str());
                     network_client.publish(topic.clone(), size).await;
                 }
             },
@@ -206,6 +236,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
 
+                    },
+                    Some(network::Event::InboundGossip{message}) => {
+                        let source_id = message.source.unwrap();
+                        let data = String::from_utf8_lossy(&message.data);
+                        let peer_size:usize = serde_json::from_str(&data).unwrap();
+                        println!("{:?}",peer_size);
+                        if peer_size<cur_peer_size{
+                            cur_peer_size = peer_size;
+                            migrate_peer = source_id;
+
+                        }
+                    },
+                    Some(network::Event::Subscribed{topic}) => {
+                        
+                        //topics.push(topic); //save topic
+                    
                     }
                 },
         }

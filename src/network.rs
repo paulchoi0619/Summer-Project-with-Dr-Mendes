@@ -7,7 +7,7 @@ use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, Protoco
 use libp2p::gossipsub::error::{GossipsubHandlerError, SubscriptionError};
 use libp2p::gossipsub::{
     GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, MessageId,
-    ValidationMode,
+    ValidationMode, TopicHash,
 };
 use libp2p::identity::ed25519;
 use libp2p::kad::record::store::MemoryStore;
@@ -26,6 +26,7 @@ use libp2p::{NetworkBehaviour, Swarm};
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::fs::Permissions;
 use std::iter;
 use tokio::io;
 use tokio::time::Duration;
@@ -224,7 +225,7 @@ impl Client {
             })
             .await
             .expect("Command receiver not to be dropped.");
-        receiver.await.expect("Sender not to be dropped.");
+        
     }
 }
 
@@ -237,7 +238,6 @@ pub struct EventLoop {
     pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
     pending_get_closest_peers: HashMap<QueryId, oneshot::Sender<Vec<PeerId>>>,
     pending_request: HashMap<RequestId, oneshot::Sender<Result<String, Box<dyn Error + Send>>>>,
-    pending_publish: HashMap<MessageId, oneshot::Sender<(PeerId, GossipsubMessage)>>,
 }
 impl EventLoop {
     fn new(
@@ -254,7 +254,6 @@ impl EventLoop {
             pending_get_providers: Default::default(),
             pending_request: Default::default(),
             pending_get_closest_peers: Default::default(),
-            pending_publish: Default::default(),
         }
     }
 
@@ -316,18 +315,22 @@ impl EventLoop {
                 message_id: id,
                 message,
             })) => {
-                //println!("Got message: {} with id: {} from peer: {:?}", String::from_utf8_lossy(&message.data), id, peer_id);
-                let _ = self
-                    .pending_publish
-                    .remove(&id)
-                    .expect("Completed")
-                    .send((peer_id, message));
+                println!("{:?}",peer_id);
+                self.event_sender
+                    .send((Event::InboundGossip{message}))
+                    .await
+                    .expect("Event receiver not to be dropped");
             }
             SwarmEvent::Behaviour(ComposedEvent::Gossipsub(GossipsubEvent::Subscribed {
                 peer_id,
                 topic,
             })) => {
                 println!("Subscribed to: {} from peer: {:?}", topic, peer_id);
+                self.event_sender
+                    .send((Event::Subscribed{topic}))
+                    .await
+                    .expect("Event receiver not to be dropped");
+                
             }
 
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(
@@ -363,14 +366,15 @@ impl EventLoop {
                     ..
                 },
             )) => {
-                println!("B Received GetProvider Response");
                 let _ = self
                     .pending_get_providers
                     .remove(&id)
                     .expect("Completed query to be previously pending.")
                     .send(providers);
             }
-            SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {}
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {
+
+            }
             SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
                 RequestResponseEvent::Message { message, .. },
             )) => match message {
@@ -488,7 +492,6 @@ impl EventLoop {
                 self.pending_start_providing.insert(query_id, sender);
             }
             Command::GetProviders { file_name, sender } => {
-                println!("A Sent Get Providers Event");
                 let query_id = self
                     .swarm
                     .behaviour_mut()
@@ -532,7 +535,13 @@ impl EventLoop {
                 self.pending_start_providing.insert(query_id, sender);
             }
             Command::Subscribe { topic } => {
-                self.swarm.behaviour_mut().gossipsub.subscribe(&topic);
+                
+                let result = self.swarm.behaviour_mut().gossipsub.subscribe(&topic);
+                match result{
+                    Ok(_) => println!("Subscribed to new topic"),
+                    Err(_) => println!("Already subscribed")
+                    
+                }
             }
             Command::Publish {
                 topic,
@@ -545,7 +554,7 @@ impl EventLoop {
                     .behaviour_mut()
                     .gossipsub
                     .publish(topic.clone(), size);
-                self.pending_publish.insert(message_id.unwrap(), sender);
+                //self.pending_publish.insert(message_id.unwrap(), sender);
             }
         }
     }
@@ -643,6 +652,12 @@ pub enum Event {
         request: String,
         channel: ResponseChannel<GenericResponse>,
     },
+    InboundGossip{
+        message: GossipsubMessage,
+    },
+    Subscribed{
+        topic: TopicHash,
+    }
 }
 
 // Simple file exchange protocol
