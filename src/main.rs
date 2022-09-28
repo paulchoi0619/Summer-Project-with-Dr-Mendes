@@ -85,11 +85,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut migrate_peer = network_client_id;
     let mut cur_peer_size = f32::INFINITY as usize;
-
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    //let mut block_migration:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
-    //let mut commands:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
-    // to be found in the network with the specific name
+
+
+    let mut migrating_block:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
+    let mut queries:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
+    
     loop {
         tokio::select! {
             line_option = stdin.next_line() =>
@@ -97,26 +98,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Ok(None) => {break;},
                 Ok(Some(line)) => {
                     match line.as_str() {
-                        // cmd if cmd.starts_with("gossip") => {
-                        //     println!("Type topic:");
-                        //     let topic = stdin.next_line().await;
-                        //     match topic {
-                        //         Ok(None) => {
-                        //             println!("Missing");
-                        //             break;
-                        //         },
-                        //         Ok(Some(line)) => {
-                                    
-                        //             let topic = IdentTopic::new(line.as_str());
-                        //             topics.push(topic.hash());
-                        //             network_client.subscribe(topic.clone()).await;
-                        //         },
-                        //         Err(_) =>{
-                        //             println!("Error")
-                        //         }
-
-                        //     }
-                        // },
                         cmd if cmd.starts_with("getlease") => {
                             println!("Type key:");
 
@@ -124,18 +105,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             match key {
                                         Ok(None) => {
                                         println!("Missing Key");
-                                        break;},
+                                        break;
+                                    },
                                         Ok(Some(line)) => {
                                         let input = line.parse::<u64>();
                                         match input{
                                             Ok(key) =>{
                                                 let entry = Entry::new(network_client_id,key);
+                                                
+                                            if is_root{ //if this peer is the node
+                                                // handle_root_request(key,entry,&mut bp_tree,&mut network_client).await;
+                                                }
+                                            else{
                                                 let lease = GeneralRequest::LeaseRequest(key,entry);
-                                            // if is_root{ //if this peer is the node
-                                            //     }
-
                                                 let providers = network_client.get_providers("root".to_string()).await;
-                                                println!("A2 Back from await");
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
@@ -156,7 +139,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
-
+                                            }
                                             }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
@@ -181,15 +164,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         cmd if cmd.starts_with("migrate") => {
-                                let peers = network_client.get_closest_peer(network_client_id).await;
-                                if peers.is_empty(){
-                                    return Err(format!("Could not find peer to migrate block.").into());
-                                }
-                                let peer = peers.choose(&mut rand::thread_rng()).unwrap();
                                 let id = bp_tree.get_top_id();
                                 let block = bp_tree.get_block(id).clone();
                                 let migrate_request = GeneralRequest::MigrateRequest(block);
-                                let result = network_client.request(*peer,migrate_request).await;
+                                let result = network_client.request(migrate_peer,migrate_request).await;
                                 match result{
                                     Ok(str) => {
                                         let response:GeneralResponse= serde_json::from_str(&str).unwrap();
@@ -209,11 +187,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 None => {
                 },
                 Some(_) => {
-                    //let size = bp_tree.get_size();
-                    let num = rand::thread_rng().gen_range(0,100);
-                    let size = num as usize;
-                    // if topics.len()>0{
-                    //let topic = Topic::new(topics[0].as_str());
+                    let size = bp_tree.get_size();
                     network_client.publish(topic.clone(), size).await;
                 }
             },
@@ -221,18 +195,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
+                        
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
                             GeneralRequest::LeaseRequest(key,entry) => {
-                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client).await;
+                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,migrate_peer,
+                                &mut migrating_block,&mut queries).await;
+                                println!("{:?}",bp_tree.get_block_map());
                             }
                             GeneralRequest::MigrateRequest(block)=>{
                                 handle_migrate(block,&mut bp_tree,channel,&mut network_client,network_client_id).await;
+                                println!("{:?}",bp_tree.get_block_map());
 
                             }
                             GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
                                 handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id,&mut network_client).await;
+                                println!("{:?}",bp_tree.get_block_map());
                             }
                         }
 
@@ -241,7 +220,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let source_id = message.source.unwrap();
                         let data = String::from_utf8_lossy(&message.data);
                         let peer_size:usize = serde_json::from_str(&data).unwrap();
-                        println!("{:?}",peer_size);
                         if peer_size<cur_peer_size{
                             cur_peer_size = peer_size;
                             migrate_peer = source_id;
@@ -249,9 +227,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     },
                     Some(network::Event::Subscribed{topic}) => {
-                        
-                        //topics.push(topic); //save topic
-                    
+                    //in case needed in the future
                     }
                 },
         }

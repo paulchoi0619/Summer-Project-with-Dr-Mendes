@@ -12,9 +12,25 @@ pub async fn handle_lease_request(
     channel: ResponseChannel<GenericResponse>,
     receiver: PeerId,
     client: &mut Client,
+    migrate_peer: PeerId,
+    migrating_block: &mut HashSet<BlockId>,
+    queries: &mut HashMap<BlockId,Vec<GeneralRequest>>,
 ) {
     let top_id = bp_tree.get_top_id(); //the topmost block id of the local b-plus tree
     let current_id = bp_tree.find(top_id, key);
+
+    if migrating_block.contains(&current_id){
+        let request= GeneralRequest::LeaseRequest(key,entry);
+        if queries.contains_key(&current_id){
+            let requests = queries.get_mut(&current_id).unwrap();
+            requests.push(request);
+        }
+        else{
+            let requests = vec![request];
+            queries.insert(current_id, requests);
+        }
+    }
+    else{
     let current_block = bp_tree.get_block(current_id); //returns either the leaf or the internal block of the local b-plus tree
     if current_block.is_leaf() {
         let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry
@@ -25,6 +41,24 @@ pub async fn handle_lease_request(
                     .respond(GeneralResponse::LeaseResponse(receiver), channel)
                     .await; //respond that the insertion is complete
                             //println!("{:?}",bp_tree.get_block_map()); //to check if the entry is added to the block
+            }
+            InsertResult::Migrate(mut Block) => {
+                let id = Block.return_id();
+                let migrate_request = GeneralRequest::MigrateRequest(Block);
+                migrating_block.insert(id);
+                let result = client.request(migrate_peer,migrate_request).await;
+                match result{
+                    Ok(_) =>{
+                        migrating_block.remove(&id);
+                        let pending_queries = queries.remove(&id).unwrap();
+                        for query in pending_queries{
+                            client.request(migrate_peer,query).await;
+                        }
+                    }
+                    Err(err) =>{
+                        println!("Error {:?}", err);
+                    }
+                }
             }
             InsertResult::InsertOnRemoteParent(parent, key, child) => {
                 //if the parent of the local block is in a remote node
@@ -71,6 +105,7 @@ pub async fn handle_lease_request(
             }
         };
     }
+    }
 }
 pub async fn handle_insert_on_remote_parent(
     key: Key,
@@ -86,6 +121,9 @@ pub async fn handle_insert_on_remote_parent(
             client
                 .respond(GeneralResponse::InsertOnRemoteParent(receiver), channel)
                 .await;
+        }
+        InsertResult::Migrate(Block)=>{
+            
         }
         InsertResult::InsertOnRemoteParent(parent, key, child) => {
             let providers = client.get_providers(parent.to_string()).await;
@@ -119,7 +157,6 @@ pub async fn handle_migrate(
 ) {
     let id = block.return_id();
     bp_tree.add_block(id, block);
-    //client.start_providing(id.to_string()).await;
     client.start_providing("root".to_string()).await; //for testing purpose
     client
         .respond(GeneralResponse::MigrateResponse(new_provider), channel)

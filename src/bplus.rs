@@ -7,16 +7,19 @@ use std::collections::HashMap;
 pub struct BPTree {
     block_map: HashMap<Key, Block>,
     top_id: BlockId,
+    next_block: HashMap<Key,Key>,
 }
 impl BPTree {
     pub fn new(root: Block) -> Self {
         let mut map = HashMap::new();
         let id = root.block_id.clone();
         map.insert(root.block_id, root);
+        let mut next_block_map = HashMap::new();
 
         Self {
             block_map: map,
             top_id: id,
+            next_block: next_block_map
         }
     }
     pub fn get_size(&self) -> usize {
@@ -83,9 +86,10 @@ impl BPTree {
         if leaf.keys.len() == SIZE {
             let mut newleaf = leaf.clone(); //create a new leaf to split and update block map
             let result = newleaf.split_leaf_block(&mut self.block_map); //splits the block and adds them to the block map
-            return self.insert_on_parent(result.left, result.divider_key, result.right);
+            self.next_block.insert(result.left,result.right);
+            return InsertResult::Migrate(self.block_map.get(&result.right).unwrap().clone());
         }
-        InsertResult::Complete
+        return InsertResult::Complete;
     }
 
     pub fn insert_on_parent(&mut self, left: BlockId, key: Key, right: BlockId) -> InsertResult {
@@ -242,6 +246,7 @@ impl Block {
 
 pub enum InsertResult {
     Complete,
+    Migrate(Block),
     InsertOnRemoteParent(BlockId, Key, BlockId),
 }
 

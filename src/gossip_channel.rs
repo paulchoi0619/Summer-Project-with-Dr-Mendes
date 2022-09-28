@@ -16,7 +16,7 @@ impl GossipLoop {
     }
     pub async fn run(mut self){
         loop{
-            let ten_sec = time::Duration::from_millis(1000);
+            let ten_sec = time::Duration::from_millis(60000);
             thread::sleep(ten_sec);
             self.gossip_sender.send("Gossip".to_string()).await;
         }

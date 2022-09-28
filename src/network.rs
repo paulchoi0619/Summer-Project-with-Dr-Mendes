@@ -315,7 +315,6 @@ impl EventLoop {
                 message_id: id,
                 message,
             })) => {
-                println!("{:?}",peer_id);
                 self.event_sender
                     .send((Event::InboundGossip{message}))
                     .await
