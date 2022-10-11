@@ -3,8 +3,6 @@ use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::gossipsub::{Topic, IdentTopic, TopicHash};
 use libp2p::multiaddr::Protocol;
-use rand::Rng;
-use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -76,7 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut block = Block::new(); //initialize block
     block.set_block_id(); 
-    let mut bp_tree = BPTree::new(block); //bp tree
+    let mut bp_tree = BPTree::new(block); //bp tree without the root 
     let mut is_root = false; 
 
     //let mut topics:Vec<TopicHash> = Vec::new();
@@ -111,21 +109,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let input = line.parse::<u64>();
                                         match input{
                                             Ok(key) =>{
-                                                let entry = Entry::new(network_client_id,key);
+                                                
                                                 
                                             if is_root{ //if this peer is the node
                                                 // handle_root_request(key,entry,&mut bp_tree,&mut network_client).await;
                                                 }
                                             else{
-                                                let lease = GeneralRequest::LeaseRequest(key,entry);
+                                               
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
                                                 let requests = providers.into_iter().map(|p| {
-
+                                                    let entry = Entry::new(network_client_id,key);
+                                                    let lease = GeneralRequest::LeaseRequest(key,entry);
                                                     let mut network_client = network_client.clone();
-                                                    let lease = lease.clone();
+                                                    //let lease = lease.clone();
                                                     async move { network_client.request(p,lease).await }.boxed()
                                                 });
 
@@ -183,7 +182,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 },
                 Err(_) => print!("Error handing input line: "),
             },
-            gossip = gossip_command.next() => match gossip{
+            gossip = gossip_command.next() => match gossip{ //initiates gossip
                 None => {
                 },
                 Some(_) => {
@@ -199,7 +198,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
-                            GeneralRequest::LeaseRequest(key,entry) => {
+                            GeneralRequest::LeaseRequest(key,entry) => { //request response channel
                                 handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,migrate_peer,
                                 &mut migrating_block,&mut queries).await;
                                 println!("{:?}",bp_tree.get_block_map());
@@ -209,8 +208,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 println!("{:?}",bp_tree.get_block_map());
 
                             }
-                            GeneralRequest::InsertOnRemoteParent(_key,block_id) =>{
-                                handle_insert_on_remote_parent(_key, block_id, &mut bp_tree, channel,network_client_id,&mut network_client).await;
+                            GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
+                                handle_insert_on_remote_parent(divider_key, parent_id,child_id, &mut bp_tree, channel,
+                                &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                         }
@@ -236,10 +236,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// internal node extra field: children
-//impl block
-// search : child if internal node or else entry
-//fn search(searched: Entry) -> Either<Entry, BlockId>
 
 #[derive(Parser, Debug)]
 #[clap(name = "libp2p file sharing example")]
@@ -261,13 +257,13 @@ struct Opt {
 pub enum GeneralRequest {
     LeaseRequest(Key, Entry),
     MigrateRequest(Block),
-    InsertOnRemoteParent(Key, BlockId),
+    InsertOnRemoteParent(Key, BlockId,BlockId),
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralResponse {
     LeaseResponse(PeerId),
     MigrateResponse(PeerId),
-    InsertOnRemoteParent(PeerId),
+    InsertOnRemoteParent(BlockId),
 }
 
 #[derive(Debug, Parser)]
