@@ -1,7 +1,7 @@
 use clap::Parser;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::gossipsub::{Topic, IdentTopic, TopicHash};
+use libp2p::gossipsub::{IdentTopic, Topic, TopicHash};
 use libp2p::multiaddr::Protocol;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -17,7 +17,7 @@ use events::{handle_insert_on_remote_parent, handle_lease_request, handle_migrat
 mod bplus;
 mod network;
 use bplus::{BPTree, Block, BlockId, Entry, Key};
-mod gossip_channel;
+mod gossip_timer;
 
 // run with cargo run -- --secret-key-seed #
 
@@ -34,14 +34,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (mut network_client, mut network_events, network_event_loop, network_client_id) =
         network::new(secret_key_seed).await?;
-    let (mut gossip_command, mut gossip_channel_loop)=
-        gossip_channel::new().await?;
+    let (mut gossip_command, mut gossip_timer_loop) = gossip_timer::new().await?;
 
     // Spawn the network task for it to run in the background.
     spawn(network_event_loop.run());
-    
-    //spawn gossip channel
-    spawn(gossip_channel_loop.run());
+
+    //spawn gossip timer
+    spawn(gossip_timer_loop.run());
 
     // In case a listen address was provided use it, otherwise listen on any
     // address.
@@ -70,25 +69,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
-    
-
     let mut block = Block::new(); //initialize block
-    block.set_block_id(); 
-    let mut bp_tree = BPTree::new(block); //bp tree without the root 
-    let mut is_root = false; 
+    block.set_block_id();
+    let mut bp_tree = BPTree::new(block); //bp tree without the root
+    let mut is_root = false;
 
     //let mut topics:Vec<TopicHash> = Vec::new();
-    let topic = Topic::new("size"); 
+    let topic = Topic::new("size");
     network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
 
     let mut migrate_peer = network_client_id;
     let mut cur_peer_size = f32::INFINITY as usize;
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
+    let mut migrating_block: HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
+    let mut queries: HashMap<BlockId, Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
 
-    let mut migrating_block:HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
-    let mut queries:HashMap<BlockId,Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
-    
     loop {
         tokio::select! {
             line_option = stdin.next_line() =>
@@ -109,13 +105,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let input = line.parse::<u64>();
                                         match input{
                                             Ok(key) =>{
-                                                
-                                                
+
+
                                             if is_root{ //if this peer is the node
                                                 // handle_root_request(key,entry,&mut bp_tree,&mut network_client).await;
                                                 }
                                             else{
-                                               
+
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
@@ -194,7 +190,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
-                        
+
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
@@ -236,7 +232,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 #[derive(Parser, Debug)]
 #[clap(name = "libp2p file sharing example")]
 struct Opt {
@@ -257,7 +252,7 @@ struct Opt {
 pub enum GeneralRequest {
     LeaseRequest(Key, Entry),
     MigrateRequest(Block),
-    InsertOnRemoteParent(Key, BlockId,BlockId),
+    InsertOnRemoteParent(Key, BlockId, BlockId),
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralResponse {
