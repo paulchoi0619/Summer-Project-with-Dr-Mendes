@@ -177,6 +177,7 @@ pub async fn handle_insert_on_remote_parent(
                     Ok(_) => {
                         bp_tree.remove_block(id); //remove block from local b-plus tree
                         migrating_block.remove(&id); //remove id from record set
+                        if queries.contains_key(&id){
                         let pending_queries = queries.remove(&id).unwrap();
                         for query in pending_queries {
                             let result = client.request(migrate_peer, query).await;
@@ -189,6 +190,7 @@ pub async fn handle_insert_on_remote_parent(
                                 }
                             }
                         }
+                    }
                     }
                     Err(err) => {
                         println!("Error {:?}", err);
