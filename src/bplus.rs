@@ -93,7 +93,7 @@ impl BPTree {
 
         if leaf.keys.len() == SIZE {
             let mut newleaf = leaf.clone(); //create a new leaf to split and update block map
-            if leaf.parent() == std::u64::MAX{ //checking if this is a root
+            if leaf.parent() == 0{ //checking if this is a root
                 let result = newleaf.split_leaf_root(&mut self.block_map);
                 self.next_block.insert(result.left,result.right); //create a link between left and right nodes
                 return InsertResult::RightBlock(result.right);
@@ -127,7 +127,7 @@ impl Block {
     pub fn new() -> Self {
         Self {
             block_id: Default::default(),
-            parent: std::u64::MAX, //default parent
+            parent: 0, //default parent
             keys: Vec::new(),
             children: Vec::new(),
             values: Vec::new(),
@@ -151,7 +151,7 @@ impl Block {
         self.is_leaf
     }
     pub fn set_block_id(&mut self) {
-        let id = rand::thread_rng().gen_range(1, 10000);
+        let id = rand::thread_rng().gen_range(1, std::u64::MAX);
         self.block_id = id;
     }
     pub fn set_parent(&mut self,parent:BlockId){
@@ -188,6 +188,7 @@ impl Block {
         
         let mut leftblock = block_map.get(&result.left).unwrap().clone();
         leftblock.parent = new_root.block_id; //update parent of left block
+        
         new_root.children.push(leftblock.block_id); //add child
 
         let mut rightblock = Block::new();
@@ -204,7 +205,7 @@ impl Block {
             leftblock.keys.pop();
             leftblock.values.pop();
         }
-
+        new_root.keys.push(rightblock.keys[0]);
         result.divider_key = rightblock.keys[0];
         leftblock.divider_key = result.divider_key; //sets the max range for leftblock
         block_map.insert(new_root.block_id, new_root); // add new root to block map

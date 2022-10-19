@@ -1,7 +1,7 @@
 use clap::Parser;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::gossipsub::{IdentTopic, Topic, TopicHash};
+use libp2p::gossipsub::Topic;
 use libp2p::multiaddr::Protocol;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (mut network_client, mut network_events, network_event_loop, network_client_id) =
         network::new(secret_key_seed).await?;
-    let (mut gossip_command, mut gossip_timer_loop) = gossip_timer::new().await?;
+    let (mut gossip_command, gossip_timer_loop) = gossip_timer::new().await?;
 
     // Spawn the network task for it to run in the background.
     spawn(network_event_loop.run());
@@ -74,9 +74,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut bp_tree = BPTree::new(block); //bp tree without the root
     let mut is_root = false;
 
-    //let mut topics:Vec<TopicHash> = Vec::new();
+
     let topic = Topic::new("size");
-    network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
+    
 
     let mut migrate_peer = network_client_id;
     let mut cur_peer_size = f32::INFINITY as usize;
@@ -152,6 +152,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             let providers = network_client.get_providers("root".to_string()).await;
                             if providers.is_empty() {
                                 network_client.boot_root().await;
+                                network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
                                 is_root = true;
                             }
                             else{
@@ -190,12 +191,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
-
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
                             GeneralRequest::LeaseRequest(key,entry) => { //request response channel
-                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,migrate_peer,
+                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,&migrate_peer,
                                 &mut migrating_block,&mut queries).await;
                                 println!("{:?}",bp_tree.get_block_map());
                             }
@@ -210,11 +210,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                         }
-
                     },
                     Some(network::Event::InboundGossip{message}) => {
+                        
                         let source_id = message.source.unwrap();
                         let data = String::from_utf8_lossy(&message.data);
+                        println!("{:?}",data);
                         let peer_size:usize = serde_json::from_str(&data).unwrap();
                         if peer_size<cur_peer_size{
                             cur_peer_size = peer_size;

@@ -12,7 +12,7 @@ pub async fn handle_lease_request(
     channel: ResponseChannel<GenericResponse>,
     receiver: PeerId,
     client: &mut Client,
-    migrate_peer: PeerId,
+    migrate_peer: &PeerId,
     migrating_block: &mut HashSet<BlockId>,
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
 ) {
@@ -51,21 +51,29 @@ pub async fn handle_lease_request(
                         client
                             .respond(GeneralResponse::LeaseResponse(receiver), channel)
                             .await; //respond that the insertion is complete
-                                    //println!("{:?}",bp_tree.get_block_map()); //to check if the entry is added to the block
+                                    
                     }
                     InsertResult::RightBlock(block_id) => {
+                        
                         let id = block_id;
                         let block = bp_tree.get_block(id).clone();
+                        client.start_providing(block.parent().to_string()).await;
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
-                        let result = client.request(migrate_peer, migrate_request).await; //request migration
+                        client
+                            .respond(GeneralResponse::LeaseResponse(receiver), channel)
+                            .await; //respond that the insertion is complete
+                        let result = client.request(*migrate_peer, migrate_request).await; 
+                        
+                        //request migration
                         match result {
                             Ok(_) => {
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
+                                if queries.contains_key(&id){
                                 let pending_queries = queries.remove(&id).unwrap();
                                 for query in pending_queries {
-                                    let result = client.request(migrate_peer, query).await;
+                                    let result = client.request(*migrate_peer, query).await;
                                     match result {
                                         Ok(str) => {
                                             println!("{:?}", str);
@@ -74,7 +82,7 @@ pub async fn handle_lease_request(
                                             println!("Error {:?}", err);
                                         }
                                     }
-                                }
+                                }}
                             }
                             Err(err) => {
                                 println!("Error {:?}", err);
@@ -82,6 +90,7 @@ pub async fn handle_lease_request(
                         }
                     }
                 }
+                
             }
         } else {
             let providers = client.get_providers(current_id.to_string()).await;
@@ -196,6 +205,7 @@ pub async fn handle_migrate(
     client: &mut Client,
     new_provider: PeerId,
 ) {
+    
     let child_id = block.return_id();
     let parent_id = block.parent(); //potential parent of the block
     let key = block.return_parent_key(); //divider key for parent block
@@ -204,8 +214,9 @@ pub async fn handle_migrate(
     client
         .respond(GeneralResponse::MigrateResponse(new_provider), channel)
         .await;
-
+    
     let parent = client.get_providers(parent_id.to_string()).await;
+    println!("{:?}",parent_id);
     let parent_call = GeneralRequest::InsertOnRemoteParent(key, parent_id, child_id);
     let requests = parent.into_iter().map(|p| {
         let mut network_client = client.clone();

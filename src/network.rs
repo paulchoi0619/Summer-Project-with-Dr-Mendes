@@ -315,6 +315,7 @@ impl EventLoop {
                 message_id: id,
                 message,
             })) => {
+                
                 self.event_sender
                     .send((Event::InboundGossip{message}))
                     .await
@@ -397,8 +398,7 @@ impl EventLoop {
                         .remove(&request_id)
                         .expect("Request to still be pending.")
                         .send(Ok(response.0));
-                    // don't wrap it in an Ok - or do
-                    // send the whole response
+                    
                 }
             },
             SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
