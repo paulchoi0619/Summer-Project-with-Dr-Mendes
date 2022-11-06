@@ -156,29 +156,40 @@ pub async fn handle_insert_on_remote_parent(
                 println!("Error {:?}", err);
             }
         };
-    } else {
+    } 
+    
+    else {
         let result = bp_tree.insert_child(key, child, parent);
         match result {
+            //Successful insertion
             InsertResult::Complete => {
                 client
                     .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
                     .await;
             }
-            InsertResult::RightBlock(block_id) => {
-                client
-                    .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
-                    .await;
-                let id = block_id;
-                let block = bp_tree.get_block(id).clone();
+            //Insertion led to split
+            InsertResult::RightBlock(right_block_id) => { //right block to split 
+                let block = bp_tree.get_block(right_block_id).clone();
                 let migrate_request = GeneralRequest::MigrateRequest(block);
-                migrating_block.insert(id);
+                migrating_block.insert(right_block_id);
                 let result = client.request(migrate_peer, migrate_request).await; //request migration
                 match result {
                     Ok(_) => {
-                        bp_tree.remove_block(id); //remove block from local b-plus tree
-                        migrating_block.remove(&id); //remove id from record set
-                        if queries.contains_key(&id){
-                        let pending_queries = queries.remove(&id).unwrap();
+                        bp_tree.remove_block(right_block_id); //remove block from local b-plus tree
+                        migrating_block.remove(&right_block_id); //remove id from record set
+                        let left_block_range = bp_tree.get_block(parent).return_divider_key(); //getting the divider key of left block from the split
+                        if child < left_block_range{
+                            client
+                                .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
+                                .await;
+                        }   
+                        else{
+                            client
+                                .respond(GeneralResponse::InsertOnRemoteParent(right_block_id), channel)
+                                .await;
+                        }
+                        if queries.contains_key(&right_block_id){
+                        let pending_queries = queries.remove(&right_block_id).unwrap();
                         for query in pending_queries {
                             let result = client.request(migrate_peer, query).await;
                             match result {

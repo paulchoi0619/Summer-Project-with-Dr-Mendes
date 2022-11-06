@@ -115,10 +115,10 @@ pub struct Client {
 impl Client {
     /// Listen for incoming connections on the given address.
 
-    pub async fn start_listening(&mut self, addr: Multiaddr) -> Result<(), Box<dyn Error + Send>> {
+    pub async fn start_listening(&mut self, addr: Multiaddr,id:PeerId) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .send(Command::StartListening { addr, sender })
+            .send(Command::StartListening { addr,id, sender })
             .await
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
@@ -287,7 +287,7 @@ impl EventLoop {
             SwarmEvent::Behaviour(ComposedEvent::Mdns(MdnsEvent::Discovered(discovered_list))) => {
                 for (peer, addr) in discovered_list {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer, addr);
-                    println!("added: {:?}", peer);
+                    //println!("added: {:?}", peer);
                     self.swarm
                         .behaviour_mut()
                         .gossipsub
@@ -315,7 +315,6 @@ impl EventLoop {
                 message_id: id,
                 message,
             })) => {
-                
                 self.event_sender
                     .send((Event::InboundGossip{message}))
                     .await
@@ -450,7 +449,11 @@ impl EventLoop {
     // network receiving from the application
     async fn handle_command(&mut self, command: Command) {
         match command {
-            Command::StartListening { addr, sender } => {
+            Command::StartListening { addr,id, sender } => {
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&id,addr.clone());
                 let _ = match self.swarm.listen_on(addr) {
                     Ok(_) => sender.send(Ok(())),
                     Err(e) => sender.send(Err(Box::new(e))),
@@ -604,6 +607,7 @@ enum Command {
     StartListening {
         addr: Multiaddr,
         sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
+        id: PeerId,
     },
     Dial {
         peer_id: PeerId,

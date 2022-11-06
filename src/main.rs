@@ -52,11 +52,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // match opt.listen_address {
     match listen_address {
         Some(addr) => network_client
-            .start_listening(addr)
+            .start_listening(addr,network_client_id)
             .await
             .expect("Listening not to fail."),
         None => network_client
-            .start_listening("/ip4/0.0.0.0/tcp/0".parse()?)
+            .start_listening("/ip4/0.0.0.0/tcp/0".parse()?,network_client_id)
             .await
             .expect("Listening not to fail."),
     };
@@ -112,10 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             Ok(key) =>{
 
 
-                                            if is_root{ //if this peer is the node
-                                                // handle_root_request(key,entry,&mut bp_tree,&mut network_client).await;
-                                                }
-                                            else{
+                                            
 
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
@@ -139,7 +136,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
-                                            }
+                                            
                                             }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
