@@ -21,6 +21,11 @@ mod gossip_timer;
 
 // run with cargo run -- --secret-key-seed #
 
+//node state
+//nodes needed to be flushed
+//address, peer id, bplus tree
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
