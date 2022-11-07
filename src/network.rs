@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::channel::{mpsc, oneshot};
 use libp2p::core::either::EitherError;
 use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
-use libp2p::gossipsub::error::{GossipsubHandlerError, SubscriptionError};
+use libp2p::gossipsub::error::{GossipsubHandlerError};
 use libp2p::gossipsub::{
     GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, MessageId,
     ValidationMode, TopicHash,

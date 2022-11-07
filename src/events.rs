@@ -17,7 +17,7 @@ pub async fn handle_lease_request(
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
 ) {
     let top_id = bp_tree.get_top_id(); //the topmost block id of the local b-plus tree
-    let current_id = bp_tree.find(top_id, key);
+    let current_id = bp_tree.find(top_id, key); //read operation
 
     if migrating_block.contains(&current_id) {
         let request = GeneralRequest::LeaseRequest(key, entry);
@@ -35,7 +35,7 @@ pub async fn handle_lease_request(
             if key >= current_block.return_divider_key() {
                 //if the key does not belong in this leaf block
                 let request = GeneralRequest::LeaseRequest(key, entry);
-                let next_block_id = bp_tree.retrieve_next(current_id);
+                let next_block_id = current_block.return_next_block();
                 let peers = client.get_providers(next_block_id.to_string()).await;
                 let _requests = peers.into_iter().map(|p| {
                     let mut network_client = client.clone();
@@ -44,7 +44,7 @@ pub async fn handle_lease_request(
                     //flush the query in the next block
                 });
             } else {
-                let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry
+                let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
                 match result {
                     InsertResult::Complete => {
                         //if the insertion is successful
@@ -53,16 +53,19 @@ pub async fn handle_lease_request(
                             .await; //respond that the insertion is complete
                                     
                     }
+                    //if it led to a split
                     InsertResult::RightBlock(block_id) => {
+                        client
+                            .respond(GeneralResponse::LeaseResponse(receiver), channel)
+                            .await; //respond that the insertion is complete
                         
+                        //Start migration
                         let id = block_id;
                         let block = bp_tree.get_block(id).clone();
                         client.start_providing(block.parent().to_string()).await;
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
-                        client
-                            .respond(GeneralResponse::LeaseResponse(receiver), channel)
-                            .await; //respond that the insertion is complete
+                        
                         let result = client.request(*migrate_peer, migrate_request).await; 
                         
                         //request migration
@@ -70,7 +73,7 @@ pub async fn handle_lease_request(
                             Ok(_) => {
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
-                                if queries.contains_key(&id){
+                                if queries.contains_key(&id){ //if there are some queries that are needed to be flushed
                                 let pending_queries = queries.remove(&id).unwrap();
                                 for query in pending_queries {
                                     let result = client.request(*migrate_peer, query).await;
@@ -93,12 +96,13 @@ pub async fn handle_lease_request(
                 
             }
         } else {
+            //this peer does not contain the block
             let providers = client.get_providers(current_id.to_string()).await;
 
             if providers.is_empty() {
                 println!("Could not find provider for lease.");
             }
-            let lease = GeneralRequest::LeaseRequest(key, entry);
+            let lease = GeneralRequest::LeaseRequest(key, entry); //send a lease request to the next peer
             let requests = providers.into_iter().map(|p| {
                 let mut network_client = client.clone();
                 let lease = lease.clone();
@@ -108,6 +112,12 @@ pub async fn handle_lease_request(
             match lease_info {
                 Ok(str) => {
                     println!("Here {:?}", str.0);
+                    let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
+                    if let GeneralResponse::LeaseResponse(source)=response{
+                    client
+                        .respond(GeneralResponse::LeaseResponse(source), channel)
+                        .await; //respond that the insertion is complete
+                    }
                 }
                 Err(err) => {
                     println!("Error {:?}", err);
@@ -130,7 +140,7 @@ pub async fn handle_insert_on_remote_parent(
     let parent_block = bp_tree.get_block(parent);
     if key >= parent_block.return_divider_key() {
         //if the key does not belong to this parent block anymore
-        let right_block = bp_tree.retrieve_next(parent); //adjacent block of the internal block
+        let right_block = parent_block.return_next_block(); //adjacent block of the internal block
         let peer = client.get_providers(right_block.to_string()).await; //get the right block
         let next_call = GeneralRequest::InsertOnRemoteParent(key, right_block, child);
         let requests = peer.into_iter().map(|p| {
@@ -195,6 +205,7 @@ pub async fn handle_insert_on_remote_parent(
                             match result {
                                 Ok(str) => {
                                     println!("{:?}", str);
+                                    
                                 }
                                 Err(err) => {
                                     println!("Error {:?}", err);
