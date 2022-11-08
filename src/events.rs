@@ -79,7 +79,6 @@ pub async fn handle_lease_request(
                                     let result = client.request(*migrate_peer, query).await;
                                     match result {
                                         Ok(str) => {
-                                            println!("{:?}", str);
                                         }
                                         Err(err) => {
                                             println!("Error {:?}", err);
@@ -188,12 +187,12 @@ pub async fn handle_insert_on_remote_parent(
                         bp_tree.remove_block(right_block_id); //remove block from local b-plus tree
                         migrating_block.remove(&right_block_id); //remove id from record set
                         let left_block_range = bp_tree.get_block(parent).return_divider_key(); //getting the divider key of left block from the split
-                        if child < left_block_range{
+                        if child < left_block_range{ //if the child still belongs to the local block
                             client
                                 .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
                                 .await;
                         }   
-                        else{
+                        else{//if it is located in the right block
                             client
                                 .respond(GeneralResponse::InsertOnRemoteParent(right_block_id), channel)
                                 .await;
@@ -204,7 +203,6 @@ pub async fn handle_insert_on_remote_parent(
                             let result = client.request(migrate_peer, query).await;
                             match result {
                                 Ok(str) => {
-                                    println!("{:?}", str);
                                     
                                 }
                                 Err(err) => {

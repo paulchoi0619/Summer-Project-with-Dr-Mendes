@@ -9,14 +9,14 @@ pub struct BPTree {
     top_id: BlockId,
 }
 impl BPTree {
-    pub fn new(root: Block) -> Self {
+    pub fn new() -> Self {
         let mut map = HashMap::new();
-        let id = root.block_id.clone();
-        map.insert(root.block_id, root); 
+        // let id = root.block_id.clone();
+        // map.insert(root.block_id, root); 
 
         Self {
             block_map: map,
-            top_id: id,
+            top_id: Default::default(),
         }
     }
     pub fn get_size(&self) -> usize {
@@ -33,6 +33,9 @@ impl BPTree {
     }
     pub fn get_top_id(&self) -> BlockId {
         self.top_id
+    }
+    pub fn set_top_id(&mut self,id:BlockId){
+        self.top_id = id;
     }
     pub fn get_block(&mut self, id: BlockId) -> &mut Block {
         self.block_map.get_mut(&id).unwrap()

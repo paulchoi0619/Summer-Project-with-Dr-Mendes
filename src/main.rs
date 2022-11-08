@@ -74,9 +74,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
-    let mut block = Block::new(); //initialize block
-    block.set_block_id();
-    let mut bp_tree = BPTree::new(block); //bp tree without the root
+    
+    let mut bp_tree = BPTree::new(); 
     let mut is_root = false;
 
 
@@ -153,6 +152,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         cmd if cmd.starts_with("root") => {
                             let providers = network_client.get_providers("root".to_string()).await;
                             if providers.is_empty() {
+                                let mut block = Block::new(); //initialize block
+                                block.set_block_id(); //initialize block id
+                                let top_id = block.return_id();
+                                bp_tree.add_block(top_id,block); //insert block in map
+                                bp_tree.set_top_id(top_id); //set the top idv
                                 network_client.boot_root().await;
                                 network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
                                 is_root = true;
