@@ -20,7 +20,7 @@ pub async fn handle_lease_request(
     let current_id = bp_tree.find(top_id, key); //read operation
 
     if migrating_block.contains(&current_id) {
-        let request = GeneralRequest::LeaseRequest(key, entry);
+        let request = GeneralRequest::LeaseRequest(key, entry,current_id);
         if queries.contains_key(&current_id) {
             let requests = queries.get_mut(&current_id).unwrap();
             requests.push(request);
@@ -34,8 +34,8 @@ pub async fn handle_lease_request(
         if current_block.is_leaf() {
             if key >= current_block.return_divider_key() {
                 //if the key does not belong in this leaf block
-                let request = GeneralRequest::LeaseRequest(key, entry);
                 let next_block_id = current_block.return_next_block();
+                let request = GeneralRequest::LeaseRequest(key, entry,next_block_id);
                 let peers = client.get_providers(next_block_id.to_string()).await;
                 let _requests = peers.into_iter().map(|p| {
                     let mut network_client = client.clone();
@@ -101,7 +101,7 @@ pub async fn handle_lease_request(
             if providers.is_empty() {
                 println!("Could not find provider for lease.");
             }
-            let lease = GeneralRequest::LeaseRequest(key, entry); //send a lease request to the next peer
+            let lease = GeneralRequest::LeaseRequest(key, entry,current_id); //send a lease request to the next peer
             let requests = providers.into_iter().map(|p| {
                 let mut network_client = client.clone();
                 let lease = lease.clone();

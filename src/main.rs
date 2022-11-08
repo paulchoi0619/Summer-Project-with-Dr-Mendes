@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     
-    let mut bp_tree = BPTree::new(); 
+    let mut bp_tree = BPTree::new(); //initialize bp_tree
     let mut is_root = false;
 
 
@@ -110,18 +110,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         match input{
                                             Ok(key) =>{
 
-
-                                            
-
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
                                                 let requests = providers.into_iter().map(|p| {
                                                     let entry = Entry::new(network_client_id,key);
-                                                    let lease = GeneralRequest::LeaseRequest(key,entry);
+                                                    let default_id = Default::default();
+                                                    let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
                                                     let mut network_client = network_client.clone();
-                                                    //let lease = lease.clone();
                                                     async move { network_client.request(p,lease).await }.boxed()
                                                 });
 
@@ -200,7 +197,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
-                            GeneralRequest::LeaseRequest(key,entry) => { //request response channel
+                            GeneralRequest::LeaseRequest(key,entry,block_id) => { //request response channel
                                 handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,&migrate_peer,
                                 &mut migrating_block,&mut queries).await;
                                 println!("{:?}",bp_tree.get_block_map());
@@ -257,7 +254,7 @@ struct Opt {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralRequest {
-    LeaseRequest(Key, Entry),
+    LeaseRequest(Key, Entry,BlockId),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
 }
