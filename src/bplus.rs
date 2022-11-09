@@ -12,7 +12,7 @@ impl BPTree {
     pub fn new() -> Self {
         let mut map = HashMap::new();
         // let id = root.block_id.clone();
-        // map.insert(root.block_id, root); 
+        // map.insert(root.block_id, root);
 
         Self {
             block_map: map,
@@ -34,13 +34,14 @@ impl BPTree {
     pub fn get_top_id(&self) -> BlockId {
         self.top_id
     }
-    pub fn set_top_id(&mut self,id:BlockId){
+    pub fn set_top_id(&mut self, id: BlockId) {
         self.top_id = id;
     }
     pub fn get_block(&mut self, id: BlockId) -> &mut Block {
         self.block_map.get_mut(&id).unwrap()
     }
-    pub fn find(&self, block_id: BlockId, k: Key) -> BlockId { //read operation
+    pub fn find(&self, block_id: BlockId, k: Key) -> BlockId {
+        //read operation
         let current = self.block_map.get(&block_id).unwrap();
         if !current.is_leaf {
             for i in 0..current.keys.len() {
@@ -62,7 +63,12 @@ impl BPTree {
         }
         return block_id; //return the leaf block id
     }
-    pub fn insert_child(&mut self, key: Key, child: BlockId,current_block: BlockId) -> InsertResult {
+    pub fn insert_child(
+        &mut self,
+        key: Key,
+        child: BlockId,
+        current_block: BlockId,
+    ) -> InsertResult {
         let current_block = self.get_block(current_block);
         current_block.add_child(key, child);
         if current_block.keys.len() == SIZE {
@@ -80,18 +86,24 @@ impl BPTree {
 
         if leaf.keys.len() == SIZE {
             let mut newleaf = leaf.clone(); //create a new leaf to split and update block map
-            if leaf.parent() == 0{ //checking if this is a root
+            if leaf.parent() == 0 {
+                //checking if this is a root
                 let result = newleaf.split_leaf_root(&mut self.block_map);
-                self.block_map.get_mut(&result.left).unwrap().set_next_block(result.right); //create a link between left and right nodes
+                self.block_map
+                    .get_mut(&result.left)
+                    .unwrap()
+                    .set_next_block(result.right); //create a link between left and right nodes
                 return InsertResult::RightBlock(result.right);
             }
             let result = newleaf.split_leaf_block(&mut self.block_map); //splits the block and adds them to the block map
-            self.block_map.get_mut(&result.left).unwrap().set_next_block(result.right); //create a link between left and right nodes
+            self.block_map
+                .get_mut(&result.left)
+                .unwrap()
+                .set_next_block(result.right); //create a link between left and right nodes
             return InsertResult::RightBlock(result.right);
         }
         return InsertResult::Complete;
     }
-
 }
 
 pub const SIZE: usize = 5;
@@ -124,16 +136,16 @@ impl Block {
             next_block: Default::default(),
         }
     }
-    pub fn set_next_block(&mut self,next_block:BlockId){
+    pub fn set_next_block(&mut self, next_block: BlockId) {
         self.next_block = next_block;
     }
-    pub fn return_next_block(&self)->BlockId{
+    pub fn return_next_block(&self) -> BlockId {
         self.next_block
     }
-    pub fn return_divider_key(&self) -> Key{
+    pub fn return_divider_key(&self) -> Key {
         self.divider_key
     }
-    pub fn return_parent_key(&self) -> Key{
+    pub fn return_parent_key(&self) -> Key {
         self.keys[0]
     }
     pub fn return_id(&self) -> BlockId {
@@ -149,8 +161,8 @@ impl Block {
         let id = rand::thread_rng().gen_range(1, std::u64::MAX);
         self.block_id = id;
     }
-    pub fn set_parent(&mut self,parent:BlockId){
-        self.parent=parent;
+    pub fn set_parent(&mut self, parent: BlockId) {
+        self.parent = parent;
     }
     pub fn add_entry(&mut self, k: Key, new_entry: Entry) {
         for i in 0..self.keys.len() {
@@ -166,7 +178,7 @@ impl Block {
     pub fn add_child(&mut self, k: Key, new_block: BlockId) {
         for i in 0..self.keys.len() {
             if self.keys[i] == k {
-                self.keys.insert(i,k);
+                self.keys.insert(i, k);
                 self.children.insert(i + 1, new_block); //insert child
                 return;
             }
@@ -180,10 +192,10 @@ impl Block {
         let mut new_root = Block::new();
         new_root.set_block_id();
         new_root.is_leaf = false;
-        
+
         let mut leftblock = block_map.get(&result.left).unwrap().clone();
         leftblock.parent = new_root.block_id; //update parent of left block
-        
+
         new_root.children.push(leftblock.block_id); //add child
 
         let mut rightblock = Block::new();
@@ -232,7 +244,7 @@ impl Block {
         block_map.insert(leftblock.block_id, leftblock); //update
         return result;
     }
-    
+
     pub fn split_internal_block(&mut self, block_map: &mut HashMap<u64, Block>) -> SplitResult {
         let mut result = SplitResult::new(self.block_id);
         let mut leftblock = block_map.get(&self.block_id).unwrap().clone();

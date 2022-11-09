@@ -4,7 +4,7 @@ use libp2p::core::{Multiaddr, PeerId};
 use libp2p::gossipsub::Topic;
 use libp2p::multiaddr::Protocol;
 use libp2p::request_response::ResponseChannel;
-use network::{GenericResponse, Client};
+use network::{Client, GenericResponse};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -22,9 +22,6 @@ use bplus::{BPTree, Block, BlockId, Entry, Key};
 mod gossip_timer;
 
 // run with cargo run -- --secret-key-seed #
-
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -52,11 +49,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // match opt.listen_address {
     match listen_address {
         Some(addr) => network_client
-            .start_listening(addr,network_client_id)
+            .start_listening(addr, network_client_id)
             .await
             .expect("Listening not to fail."),
         None => network_client
-            .start_listening("/ip4/0.0.0.0/tcp/0".parse()?,network_client_id)
+            .start_listening("/ip4/0.0.0.0/tcp/0".parse()?, network_client_id)
             .await
             .expect("Listening not to fail."),
     };
@@ -74,13 +71,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
-    
     let mut bp_tree = BPTree::new(); //initialize bp_tree
     let mut is_root = false;
 
-
     let topic = Topic::new("size");
-    
 
     let mut migrate_peer = network_client_id;
     let mut cur_peer_size = f32::INFINITY as usize;
@@ -132,7 +126,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 },
                                                 Err(err) => println!("Error {:?}", err),
                                             };
-                                            
+
                                             }
                                             Err(_) =>{
                                                 println!("Incorrect Key")
@@ -218,7 +212,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     },
                     Some(network::Event::InboundGossip{message}) => {
-                        
+
                         let source_id = message.source.unwrap();
                         let data = String::from_utf8_lossy(&message.data);
                         println!("{:?}",data);
@@ -265,7 +259,7 @@ struct Opt {
 // }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralRequest {
-    LeaseRequest(Key, Entry,BlockId),
+    LeaseRequest(Key, Entry, BlockId),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
     ConfirmParent(Key),
@@ -275,7 +269,7 @@ pub enum GeneralResponse {
     LeaseResponse(PeerId),
     MigrateResponse(PeerId),
     InsertOnRemoteParent(BlockId),
-    ConfirmParent(BlockId)
+    ConfirmParent(BlockId),
 }
 
 #[derive(Debug, Parser)]

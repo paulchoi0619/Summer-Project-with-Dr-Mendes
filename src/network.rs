@@ -1,13 +1,12 @@
-
 use super::*;
 use async_trait::async_trait;
 use futures::channel::{mpsc, oneshot};
 use libp2p::core::either::EitherError;
 use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed, ProtocolName};
-use libp2p::gossipsub::error::{GossipsubHandlerError};
+use libp2p::gossipsub::error::GossipsubHandlerError;
 use libp2p::gossipsub::{
     GossipsubEvent, GossipsubMessage, IdentTopic as Topic, MessageAuthenticity, MessageId,
-    ValidationMode, TopicHash,
+    TopicHash, ValidationMode,
 };
 use libp2p::identity::ed25519;
 use libp2p::kad::record::store::MemoryStore;
@@ -115,10 +114,14 @@ pub struct Client {
 impl Client {
     /// Listen for incoming connections on the given address.
 
-    pub async fn start_listening(&mut self, addr: Multiaddr,id:PeerId) -> Result<(), Box<dyn Error + Send>> {
+    pub async fn start_listening(
+        &mut self,
+        addr: Multiaddr,
+        id: PeerId,
+    ) -> Result<(), Box<dyn Error + Send>> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .send(Command::StartListening { addr,id, sender })
+            .send(Command::StartListening { addr, id, sender })
             .await
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
@@ -225,7 +228,6 @@ impl Client {
             })
             .await
             .expect("Command receiver not to be dropped.");
-        
     }
 }
 
@@ -316,7 +318,7 @@ impl EventLoop {
                 message,
             })) => {
                 self.event_sender
-                    .send((Event::InboundGossip{message}))
+                    .send((Event::InboundGossip { message }))
                     .await
                     .expect("Event receiver not to be dropped");
             }
@@ -326,10 +328,9 @@ impl EventLoop {
             })) => {
                 println!("Subscribed to: {} from peer: {:?}", topic, peer_id);
                 self.event_sender
-                    .send((Event::Subscribed{topic}))
+                    .send((Event::Subscribed { topic }))
                     .await
                     .expect("Event receiver not to be dropped");
-                
             }
 
             SwarmEvent::Behaviour(ComposedEvent::Kademlia(
@@ -371,9 +372,7 @@ impl EventLoop {
                     .expect("Completed query to be previously pending.")
                     .send(providers);
             }
-            SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {
-
-            }
+            SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {}
             SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
                 RequestResponseEvent::Message { message, .. },
             )) => match message {
@@ -397,7 +396,6 @@ impl EventLoop {
                         .remove(&request_id)
                         .expect("Request to still be pending.")
                         .send(Ok(response.0));
-                    
                 }
             },
             SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
@@ -449,11 +447,11 @@ impl EventLoop {
     // network receiving from the application
     async fn handle_command(&mut self, command: Command) {
         match command {
-            Command::StartListening { addr,id, sender } => {
+            Command::StartListening { addr, id, sender } => {
                 self.swarm
                     .behaviour_mut()
                     .kademlia
-                    .add_address(&id,addr.clone());
+                    .add_address(&id, addr.clone());
                 let _ = match self.swarm.listen_on(addr) {
                     Ok(_) => sender.send(Ok(())),
                     Err(e) => sender.send(Err(Box::new(e))),
@@ -537,12 +535,10 @@ impl EventLoop {
                 self.pending_start_providing.insert(query_id, sender);
             }
             Command::Subscribe { topic } => {
-                
                 let result = self.swarm.behaviour_mut().gossipsub.subscribe(&topic);
-                match result{
+                match result {
                     Ok(_) => println!("Subscribed to new topic"),
-                    Err(_) => println!("Already subscribed")
-                    
+                    Err(_) => println!("Already subscribed"),
                 }
             }
             Command::Publish {
@@ -655,12 +651,12 @@ pub enum Event {
         request: String,
         channel: ResponseChannel<GenericResponse>,
     },
-    InboundGossip{
+    InboundGossip {
         message: GossipsubMessage,
     },
-    Subscribed{
+    Subscribed {
         topic: TopicHash,
-    }
+    },
 }
 
 // Simple file exchange protocol
