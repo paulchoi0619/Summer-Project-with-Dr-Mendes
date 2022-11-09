@@ -50,7 +50,7 @@ impl BPTree {
                     if self.block_map.contains_key(&new_id) {
                         return self.find(new_id, k); //if the child id is in block map, do a recursive search
                     } else {
-                        return block_id; //else return this id since this local block map does not contain the block
+                        return new_id; //else return this id since this local block map does not contain the block
                     }
                 }
             }
@@ -58,7 +58,7 @@ impl BPTree {
             if self.block_map.contains_key(&new_id) {
                 return self.find(new_id, k); //if the child is in block map, continue with search
             } else {
-                return block_id; //else return the internal block id
+                return new_id; //else return the internal block id
             }
         }
         return block_id; //return the leaf block id
