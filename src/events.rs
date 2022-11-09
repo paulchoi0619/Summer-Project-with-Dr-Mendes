@@ -159,6 +159,7 @@ pub async fn handle_insert_on_remote_parent(
                     }
                     GeneralResponse::MigrateResponse(_) => {}
                     GeneralResponse::LeaseResponse(_) => {}
+                    GeneralResponse::ConfirmParent(_) => {}
                 }
             }
             Err(err) => {
@@ -220,6 +221,49 @@ pub async fn handle_insert_on_remote_parent(
         }
     }
 }
+
+pub async fn handle_parent_check(
+    bp_tree: &mut BPTree,
+    channel: ResponseChannel<GenericResponse>,
+    client: &mut Client,
+    parent: BlockId,
+    child_key: Key,
+){
+    let block = bp_tree.get_block(parent);
+    if child_key< block.return_divider_key(){
+        let response = GeneralResponse::ConfirmParent(parent);
+        client.respond(response,channel).await;
+    } 
+    else{
+        let next_block_id = block.return_next_block();
+        let next_parent_check = GeneralRequest::ConfirmParent(child_key);
+        let next_provider = client.get_providers(next_block_id.to_string()).await;
+        let requests = next_provider.into_iter().map(|p| {
+            let mut network_client = client.clone();
+            let next_parent_check = next_parent_check.clone();
+            async move { network_client.request(p, next_parent_check).await }.boxed()
+        });
+        let insert_info = futures::future::select_ok(requests).await;
+        match insert_info {
+            Ok(str) => {
+                let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
+                match response {
+                    GeneralResponse::InsertOnRemoteParent(_) => {}
+                    GeneralResponse::MigrateResponse(_) => {}
+                    GeneralResponse::LeaseResponse(_) => {}
+                    GeneralResponse::ConfirmParent(parent) => {
+                        let response = GeneralResponse::ConfirmParent(parent);
+                        client.respond(response,channel).await;
+                    }
+                }
+            }
+            Err(err) => {
+                println!("Error {:?}", err);
+            }
+        };
+    }
+}
+
 pub async fn handle_migrate(
     block: Block,
     bp_tree: &mut BPTree,
@@ -239,7 +283,7 @@ pub async fn handle_migrate(
     
     let parent = client.get_providers(parent_id.to_string()).await;
     println!("{:?}",parent_id);
-    let parent_call = GeneralRequest::InsertOnRemoteParent(key, parent_id, child_id);
+    let parent_call = GeneralRequest::ConfirmParent(key);
     let requests = parent.into_iter().map(|p| {
         let mut network_client = client.clone();
         let parent_call = parent_call.clone();
@@ -250,12 +294,13 @@ pub async fn handle_migrate(
         Ok(str) => {
             let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
             match response {
-                GeneralResponse::InsertOnRemoteParent(parent) => {
-                    let block = bp_tree.get_block(child_id);
-                    block.set_parent(parent);
-                }
+                GeneralResponse::InsertOnRemoteParent(_) => {}
                 GeneralResponse::MigrateResponse(_) => {}
                 GeneralResponse::LeaseResponse(_) => {}
+                GeneralResponse::ConfirmParent(parent) => {
+                    let child_block = bp_tree.get_block(child_id);
+                    child_block.set_parent(parent);
+                }
             }
         }
         Err(err) => {

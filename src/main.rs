@@ -3,6 +3,8 @@ use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::gossipsub::Topic;
 use libp2p::multiaddr::Protocol;
+use libp2p::request_response::ResponseChannel;
+use network::{GenericResponse, Client};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -21,9 +23,7 @@ mod gossip_timer;
 
 // run with cargo run -- --secret-key-seed #
 
-//node state
-//nodes needed to be flushed
-//address, peer id, bplus tree
+
 
 
 #[tokio::main]
@@ -212,6 +212,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
                                 println!("{:?}",bp_tree.get_block_map());
                             }
+                            GeneralRequest::ConfirmParent(key) =>{
+
+                            }
                         }
                     },
                     Some(network::Event::InboundGossip{message}) => {
@@ -252,17 +255,27 @@ struct Opt {
     // argument: CliArgument,
 }
 
+// struct NodeState{
+//     bp_tree: &mut BPTree,
+//     channel: ResponseChannel<GenericResponse>,
+//     client: &mut Client,
+//     migrate_peer: PeerId,
+//     migrating_block: &mut HashSet<BlockId>,
+//     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
+// }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralRequest {
     LeaseRequest(Key, Entry,BlockId),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
+    ConfirmParent(Key),
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralResponse {
     LeaseResponse(PeerId),
     MigrateResponse(PeerId),
     InsertOnRemoteParent(BlockId),
+    ConfirmParent(BlockId)
 }
 
 #[derive(Debug, Parser)]

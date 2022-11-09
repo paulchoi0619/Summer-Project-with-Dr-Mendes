@@ -166,6 +166,7 @@ impl Block {
     pub fn add_child(&mut self, k: Key, new_block: BlockId) {
         for i in 0..self.keys.len() {
             if self.keys[i] == k {
+                self.keys.insert(i,k);
                 self.children.insert(i + 1, new_block); //insert child
                 return;
             }
