@@ -504,13 +504,13 @@ impl EventLoop {
             }
             Command::StopProviding { file_name, sender } => {
                 let key = file_name.into_bytes();
-                let query_id = self
-                    .swarm
-                    .behaviour_mut()
-                    .kademlia
-                    .stop_providing(key.into())
-                    .expect("No store error.");
-                self.pending_stop_providing.insert(query_id, sender);
+                // let query_id = self
+                //     .swarm
+                //     .behaviour_mut()
+                //     .kademlia
+                    //.stop_providing(key.into())
+                    //.expect("No store error.");
+                // self.pending_stop_providing.insert(query_id, sender);
             }
             Command::GetProviders { file_name, sender } => {
                 let query_id = self

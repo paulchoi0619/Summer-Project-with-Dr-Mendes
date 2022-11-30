@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libp2p = {version = "0.48.0", features = ["serde","default"]}
+libp2p = {version = "0.44.0", features = ["serde","default"]}
 serde = {version = "*", features = ["derive"]}
 serde_json = "*"
 proc-macro-error = "1"
