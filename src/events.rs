@@ -106,6 +106,7 @@ pub async fn handle_lease_request(
                 let lease = lease.clone();
                 async move { network_client.request(p, lease).await }.boxed()
             });
+            
             let lease_info = futures::future::select_ok(requests).await;
             match lease_info {
                 Ok(str) => {
