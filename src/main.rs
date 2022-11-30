@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let opt = Opt::parse();
     // manual args
-    // let secret_key_seed: Option<u8> = Some(1);
+    //let secret_key_seed: Option<u8> = Some(1);
     let secret_key_seed = opt.secret_key_seed;
     let listen_address: Option<Multiaddr> = None;
     let peer: Option<Multiaddr> = None;

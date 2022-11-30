@@ -5,12 +5,30 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "(OSX) Launch",
             "type": "lldb",
             "request": "launch",
-            "name": "Debug",
-            "program": "${workspaceFolder}/target/debug/libp2p",
+            "program": "${workspaceRoot}/target/debug/thisbplustree",
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceRoot}",
         }
+        // {
+        //     "type": "lldb",
+        //     "request": "launch",
+        //     "name": "Debug",
+        //     "cargo": {
+        //         "args": [
+        //             "run",
+        //             "--bin=",
+        //             "--package=thisbplustree"
+        //         ],
+        //         "filter": {
+        //             "name": "thisbplustree",
+        //             "kind": "bin"
+        //         }
+        //     },
+        //     "args": [],
+        //     "cwd": "${workspaceFolder}"
+        // }
     ]
 }
