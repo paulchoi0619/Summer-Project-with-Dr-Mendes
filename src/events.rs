@@ -53,15 +53,39 @@ pub async fn handle_lease_request(
                             .await; //respond that the insertion is complete
                     }
                     //if it led to a split
-                    InsertResult::RightBlock(block_id) => {
+                    InsertResult::RightBlock(block_id,divider_key )=> {
                         client
                             .respond(GeneralResponse::LeaseResponse(receiver), channel)
                             .await; //respond that the insertion is complete
 
-                        //Start migration
+                        
                         let id = block_id;
-                        let block = bp_tree.get_block(id).clone();
+                        let mut block = bp_tree.get_block(id).clone();
                         client.start_providing(block.parent().to_string()).await; //provide until migration is complete
+
+
+                        //need to inform parent about the existence
+                        let divider_key_request = GeneralRequest::InsertOnRemoteParent(divider_key, block.parent(), id);
+                        let peers = client.get_providers(block.parent().to_string()).await;
+                        let divider_key_requests = peers.into_iter().map(|p| {
+                            let mut network_client = client.clone();
+                            let divider_key_request = divider_key_request.clone();
+                            async move { network_client.request(p, divider_key_request).await }.boxed()
+                        });
+
+                        let info = futures::future::select_ok(divider_key_requests)
+                                                .await;
+                        match info{
+                            Ok(str) => {
+                                let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
+                                if let GeneralResponse::InsertOnRemoteParent(parent)=response{
+                                    block.set_parent(parent);
+
+                                }
+                            },
+                            Err(err) => println!("Error {:?}", err),
+                        };
+
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
 
@@ -97,7 +121,6 @@ pub async fn handle_lease_request(
         } else {
             //this peer does not contain the block
             let providers = client.get_providers(current_id.to_string()).await;
-
             if providers.is_empty() {
                 println!("Could not find provider for lease.");
             }
@@ -112,12 +135,12 @@ pub async fn handle_lease_request(
             match lease_info {
                 Ok(str) => {
                     println!("Here {:?}", str.0);
-                    let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
-                    if let GeneralResponse::LeaseResponse(source) = response {
-                        client
-                            .respond(GeneralResponse::LeaseResponse(source), channel)
-                            .await; //respond that the insertion is complete
-                    }
+                    // let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
+                    // if let GeneralResponse::LeaseResponse(source) = response {
+                    //     client
+                    //         .respond(GeneralResponse::LeaseResponse(source), channel)
+                    //         .await; //respond that the insertion is complete
+                    // }
                 }
                 Err(err) => {
                     println!("Error {:?}", err);
@@ -177,7 +200,7 @@ pub async fn handle_insert_on_remote_parent(
                     .await;
             }
             //Insertion led to split
-            InsertResult::RightBlock(right_block_id) => {
+            InsertResult::RightBlock(right_block_id,divider_key) => {
                 //right block to split
                 let block = bp_tree.get_block(right_block_id).clone();
                 let migrate_request = GeneralRequest::MigrateRequest(block);
@@ -273,38 +296,10 @@ pub async fn handle_migrate(
     new_provider: PeerId,
 ) {
     let child_id = block.return_id();
-    let parent_id = block.parent(); //potential parent of the block
-    let key = block.return_parent_key(); //divider key for parent block
     bp_tree.add_block(child_id, block);
     client.start_providing(child_id.to_string()).await;
     client
         .respond(GeneralResponse::MigrateResponse(new_provider), channel)
         .await;
 
-    let parent = client.get_providers(parent_id.to_string()).await;
-    println!("{:?}", parent_id);
-    let parent_call = GeneralRequest::ConfirmParent(key);
-    let requests = parent.into_iter().map(|p| {
-        let mut network_client = client.clone();
-        let parent_call = parent_call.clone();
-        async move { network_client.request(p, parent_call).await }.boxed()
-    });
-    let insert_info = futures::future::select_ok(requests).await;
-    match insert_info {
-        Ok(str) => {
-            let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
-            match response {
-                GeneralResponse::InsertOnRemoteParent(_) => {}
-                GeneralResponse::MigrateResponse(_) => {}
-                GeneralResponse::LeaseResponse(_) => {}
-                GeneralResponse::ConfirmParent(parent) => {
-                    let child_block = bp_tree.get_block(child_id);
-                    child_block.set_parent(parent);
-                }
-            }
-        }
-        Err(err) => {
-            println!("Error {:?}", err);
-        }
-    };
 }
