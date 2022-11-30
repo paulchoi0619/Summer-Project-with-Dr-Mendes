@@ -154,6 +154,15 @@ impl Client {
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.");
     }
+    //Stop providing
+    pub async fn stop_providing(&mut self, file_name: String) {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::StopProviding { file_name, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.");
+    }
     /// Find the providers for the given file on the DHT.
     pub async fn get_providers(&mut self, file_name: String) -> HashSet<PeerId> {
         let (sender, receiver) = oneshot::channel();
@@ -237,6 +246,7 @@ pub struct EventLoop {
     event_sender: mpsc::Sender<Event>,
     pending_dial: HashMap<PeerId, oneshot::Sender<Result<(), Box<dyn Error + Send>>>>,
     pending_start_providing: HashMap<QueryId, oneshot::Sender<()>>,
+    pending_stop_providing: HashMap<QueryId, oneshot::Sender<()>>,
     pending_get_providers: HashMap<QueryId, oneshot::Sender<HashSet<PeerId>>>,
     pending_get_closest_peers: HashMap<QueryId, oneshot::Sender<Vec<PeerId>>>,
     pending_request: HashMap<RequestId, oneshot::Sender<Result<String, Box<dyn Error + Send>>>>,
@@ -253,6 +263,7 @@ impl EventLoop {
             event_sender,
             pending_dial: Default::default(),
             pending_start_providing: Default::default(),
+            pending_stop_providing: Default::default(),
             pending_get_providers: Default::default(),
             pending_request: Default::default(),
             pending_get_closest_peers: Default::default(),
@@ -491,6 +502,16 @@ impl EventLoop {
                     .expect("No store error.");
                 self.pending_start_providing.insert(query_id, sender);
             }
+            Command::StopProviding { file_name, sender } => {
+                let key = file_name.into_bytes();
+                let query_id = self
+                    .swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .stop_providing(key.into())
+                    .expect("No store error.");
+                self.pending_stop_providing.insert(query_id, sender);
+            }
             Command::GetProviders { file_name, sender } => {
                 let query_id = self
                     .swarm
@@ -611,6 +632,10 @@ enum Command {
         sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
     },
     StartProviding {
+        file_name: String,
+        sender: oneshot::Sender<()>,
+    },
+    StopProviding {
         file_name: String,
         sender: oneshot::Sender<()>,
     },

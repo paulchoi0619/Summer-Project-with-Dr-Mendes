@@ -61,7 +61,7 @@ pub async fn handle_lease_request(
                         //Start migration
                         let id = block_id;
                         let block = bp_tree.get_block(id).clone();
-                        client.start_providing(block.parent().to_string()).await;
+                        client.start_providing(block.parent().to_string()).await; //provide until migration is complete
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
 
@@ -70,6 +70,7 @@ pub async fn handle_lease_request(
                         //request migration
                         match result {
                             Ok(_) => {
+                                
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
                                 if queries.contains_key(&id) {
