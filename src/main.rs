@@ -10,7 +10,9 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc,Mutex};
 use std::path::PathBuf;
+use std::thread;
 use tokio;
 use tokio::io::AsyncBufReadExt;
 use tokio::spawn;
@@ -82,8 +84,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut migrating_block: HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
     let mut queries: HashMap<BlockId, Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
-
+    
     loop {
+
         tokio::select! {
             line_option = stdin.next_line() =>
             match line_option {
@@ -104,30 +107,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         match input{
                                             Ok(key) =>{
 
+                                                
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
-                                                let requests = providers.into_iter().map(|p| {
+                                            
+
+                                            //ask Dr. Mendes
+                                            let network_client = Arc::new(Mutex::new(network_client.clone()));
+                                            let handle =thread::spawn(move ||{
+                                                let mut p = network_client_id;
+                                                for i in providers.iter(){
+                                                    p = *i;
+                                                }
                                                     let entry = Entry::new(network_client_id,key);
                                                     let default_id = Default::default();
                                                     let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
-                                                    let mut network_client = network_client.clone();
-                                                    async move { network_client.request(p,lease).await }.boxed()
-                                                });
+                                                    let mut network_client = Arc::clone(&network_client).lock().unwrap().clone();
+                                                    network_client.request(p,lease);
+                                                    
+                                            });
+                                            let result = handle.join();
+                                            match result{
+                                                Ok(_)=>{
 
-                                            let lease_info = futures::future::select_ok(requests)
-                                                .await;
-
-                                            match lease_info{
-                                                Ok(str) => {
-                                                    let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
-                                                    println!("Here {:?}", response);
                                                 },
-                                                Err(err) => println!("Error {:?}", err),
-                                            };
-
+                                                Err(_)=>{
+                                                    println!("Error");
+                                                }
                                             }
+                                            }
+
+
                                             Err(_) =>{
                                                 println!("Incorrect Key")
                                             }
@@ -192,18 +204,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         match response{
 
                             GeneralRequest::LeaseRequest(key,entry,block_id) => { //request response channel
+
                                 handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,&migrate_peer,
                                 &mut migrating_block,&mut queries).await;
+
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                             GeneralRequest::MigrateRequest(block)=>{
+
                                 handle_migrate(block,&mut bp_tree,channel,&mut network_client,network_client_id).await;
+
                                 println!("{:?}",bp_tree.get_block_map());
 
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
+
                                 handle_insert_on_remote_parent(divider_key, parent_id,child_id, &mut bp_tree, channel,
                                 &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
+                                
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                             GeneralRequest::ConfirmParent(key) =>{

@@ -44,24 +44,42 @@ pub async fn handle_lease_request(
                     //flush the query in the next block
                 });
             } else {
-                let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
+                //return current_id
+            }
+        } else {
+            //this peer does not contain the block
+            //return current_id
+        }
+    }
+}
+pub fn insert(
+    current_id:BlockId,
+    key: Key,
+    entry: Entry,
+    bp_tree: &mut BPTree,
+    channel: ResponseChannel<GenericResponse>,
+    receiver: PeerId,
+    client: &mut Client,
+    migrate_peer: &PeerId,
+    migrating_block: &mut HashSet<BlockId>,
+    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,){
+        let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
                 match result {
                     InsertResult::Complete => {
                         //if the insertion is successful
                         client
-                            .respond(GeneralResponse::LeaseResponse(receiver), channel)
-                            .await; //respond that the insertion is complete
+                            .respond(GeneralResponse::LeaseResponse(receiver), channel);
+                             //respond that the insertion is complete
                     }
                     //if it led to a split
                     InsertResult::RightBlock(block_id,divider_key )=> {
                         client
-                            .respond(GeneralResponse::LeaseResponse(receiver), channel)
-                            .await; //respond that the insertion is complete
+                            .respond(GeneralResponse::LeaseResponse(receiver), channel); //respond that the insertion is complete
 
                         
                         let id = block_id;
                         let mut block = bp_tree.get_block(id).clone();
-                        client.start_providing(block.parent().to_string()).await; //provide until migration is complete
+                        client.start_providing(block.parent().to_string()); //provide until migration is complete
 
 
                         //need to inform parent about the existence
@@ -89,7 +107,7 @@ pub async fn handle_lease_request(
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
 
-                        let result = client.request(*migrate_peer, migrate_request).await;
+                        let result = client.request(*migrate_peer, migrate_request);
 
                         //request migration
                         match result {
@@ -117,38 +135,46 @@ pub async fn handle_lease_request(
                         }
                     }
                 }
-            }
-        } else {
-            //this peer does not contain the block
-            let providers = client.get_providers(current_id.to_string()).await;
-            if providers.is_empty() {
-                println!("Could not find provider for lease.");
-            }
-            let lease = GeneralRequest::LeaseRequest(key, entry, current_id); //send a lease request to the next peer
-            let requests = providers.into_iter().map(|p| {
-                let mut network_client = client.clone();
-                let lease = lease.clone();
-                async move { network_client.request(p, lease).await }.boxed()
-            });
-            
-            let lease_info = futures::future::select_ok(requests).await;
-            match lease_info {
-                Ok(str) => {
-                    println!("Here {:?}", str.0);
-                    // let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
-                    // if let GeneralResponse::LeaseResponse(source) = response {
-                    //     client
-                    //         .respond(GeneralResponse::LeaseResponse(source), channel)
-                    //         .await; //respond that the insertion is complete
-                    // }
-                }
-                Err(err) => {
-                    println!("Error {:?}", err);
-                }
-            };
-        }
-    }
 }
+
+pub fn send_insert_query(
+    current_id:BlockId,
+    key: Key,
+    entry: Entry,
+    bp_tree: &mut BPTree,
+    channel: ResponseChannel<GenericResponse>,
+    receiver: PeerId,
+    client: &mut Client,
+    migrate_peer: &PeerId,
+    migrating_block: &mut HashSet<BlockId>,
+    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,){
+        let providers = client.get_providers(current_id.to_string());
+        if providers.is_empty() {
+            println!("Could not find provider for lease.");
+        }
+        let lease = GeneralRequest::LeaseRequest(key, entry, current_id); //send a lease request to the next peer
+        let requests = providers.into_iter().map(|p| {
+            let mut network_client = client.clone();
+            let lease = lease.clone();
+            async move { network_client.request(p, lease).await }.boxed()
+        });
+        
+        let lease_info = futures::future::select_ok(requests);
+        match lease_info {
+            Ok(str) => {
+                println!("Here {:?}", str.0);
+                // let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
+                // if let GeneralResponse::LeaseResponse(source) = response {
+                //     client
+                //         .respond(GeneralResponse::LeaseResponse(source), channel)
+                //         .await; //respond that the insertion is complete
+                // }
+            }
+            Err(err) => {
+                println!("Error {:?}", err);
+            }
+        };
+    }
 pub async fn handle_insert_on_remote_parent(
     key: Key,
     parent: BlockId,
