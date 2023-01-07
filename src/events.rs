@@ -52,7 +52,7 @@ pub async fn handle_lease_request(
         }
     }
 }
-pub fn insert(
+pub async fn insert(
     current_id:BlockId,
     key: Key,
     entry: Entry,
@@ -107,7 +107,7 @@ pub fn insert(
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
 
-                        let result = client.request(*migrate_peer, migrate_request);
+                        let result = client.request(*migrate_peer, migrate_request).await;
 
                         //request migration
                         match result {
@@ -137,7 +137,7 @@ pub fn insert(
                 }
 }
 
-pub fn send_insert_query(
+pub async fn send_insert_query(
     current_id:BlockId,
     key: Key,
     entry: Entry,
@@ -148,7 +148,7 @@ pub fn send_insert_query(
     migrate_peer: &PeerId,
     migrating_block: &mut HashSet<BlockId>,
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,){
-        let providers = client.get_providers(current_id.to_string());
+        let providers = client.get_providers(current_id.to_string()).await;
         if providers.is_empty() {
             println!("Could not find provider for lease.");
         }
@@ -158,8 +158,7 @@ pub fn send_insert_query(
             let lease = lease.clone();
             async move { network_client.request(p, lease).await }.boxed()
         });
-        
-        let lease_info = futures::future::select_ok(requests);
+        let lease_info = futures::future::select_ok(requests).await;
         match lease_info {
             Ok(str) => {
                 println!("Here {:?}", str.0);

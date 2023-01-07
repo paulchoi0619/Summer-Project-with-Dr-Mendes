@@ -115,8 +115,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             
 
                                             //ask Dr. Mendes
-                                            let network_client = Arc::new(Mutex::new(network_client.clone()));
+                                            let mut copy_network_client = network_client.clone();
                                             let handle =thread::spawn(move ||{
+                                               
                                                 let mut p = network_client_id;
                                                 for i in providers.iter(){
                                                     p = *i;
@@ -124,8 +125,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     let entry = Entry::new(network_client_id,key);
                                                     let default_id = Default::default();
                                                     let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
-                                                    let mut network_client = Arc::clone(&network_client).lock().unwrap().clone();
-                                                    network_client.request(p,lease);
+                                                    
+                                                    copy_network_client.request(p,lease);
                                                     
                                             });
                                             let result = handle.join();
@@ -218,7 +219,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
-
+                                
                                 handle_insert_on_remote_parent(divider_key, parent_id,child_id, &mut bp_tree, channel,
                                 &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
                                 
