@@ -182,7 +182,6 @@ pub async fn handle_insert_on_remote_parent(
                     }
                     GeneralResponse::MigrateResponse(_) => {}
                     GeneralResponse::LeaseResponse(_) => {}
-                    GeneralResponse::ConfirmParent(_) => {}
                 }
             }
             Err(err) => {

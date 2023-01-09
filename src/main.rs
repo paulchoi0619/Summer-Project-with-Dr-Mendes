@@ -220,9 +220,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 
                                 println!("{:?}",bp_tree.get_block_map());
                             }
-                            GeneralRequest::ConfirmParent(key) =>{
-
-                            }
                         }
                     },
                     Some(network::Event::InboundGossip{message}) => {
@@ -276,14 +273,12 @@ pub enum GeneralRequest {
     LeaseRequest(Key, Entry, BlockId),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
-    ConfirmParent(Key),
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralResponse {
     LeaseResponse(PeerId),
     MigrateResponse(PeerId),
     InsertOnRemoteParent(BlockId),
-    ConfirmParent(BlockId),
 }
 
 #[derive(Debug, Parser)]
