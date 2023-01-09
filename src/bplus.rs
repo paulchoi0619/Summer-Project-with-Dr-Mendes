@@ -19,6 +19,9 @@ impl BPTree {
             top_id: Default::default(),
         }
     }
+    pub fn contains(&self, id:BlockId) -> bool{
+        self.block_map.contains_key(&id)
+    }
     pub fn get_size(&self) -> usize {
         self.block_map.keys().len()
     }

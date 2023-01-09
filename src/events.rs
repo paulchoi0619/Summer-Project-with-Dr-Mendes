@@ -16,6 +16,9 @@ pub async fn handle_lease_request(
     migrating_block: &mut HashSet<BlockId>,
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
 ) {
+    // respond that it received the query since not responding leads to response omission error
+    client.respond(GeneralResponse::LeaseResponse(receiver), channel).await; 
+
     let top_id = bp_tree.get_top_id(); //the topmost block id of the local b-plus tree
     let current_id = bp_tree.find(top_id, key); //read operation
 
@@ -44,11 +47,10 @@ pub async fn handle_lease_request(
                     //flush the query in the next block
                 });
             } else {
-                //return current_id
+                
             }
         } else {
-            //this peer does not contain the block
-            //return current_id
+            
         }
     }
 }
@@ -57,8 +59,6 @@ pub async fn insert(
     key: Key,
     entry: Entry,
     bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
-    receiver: PeerId,
     client: &mut Client,
     migrate_peer: &PeerId,
     migrating_block: &mut HashSet<BlockId>,
@@ -67,22 +67,24 @@ pub async fn insert(
                 match result {
                     InsertResult::Complete => {
                         //if the insertion is successful
-                        client
-                            .respond(GeneralResponse::LeaseResponse(receiver), channel);
-                             //respond that the insertion is complete
+                        println!("Success!");
                     }
                     //if it led to a split
                     InsertResult::RightBlock(block_id,divider_key )=> {
-                        client
-                            .respond(GeneralResponse::LeaseResponse(receiver), channel); //respond that the insertion is complete
-
-                        
                         let id = block_id;
                         let mut block = bp_tree.get_block(id).clone();
-                        client.start_providing(block.parent().to_string()); //provide until migration is complete
+                        let parent = block.parent();
+                        client.start_providing(block_id.to_string()).await; //provide until migration is complete
 
 
                         //need to inform parent about the existence
+
+                        //if the parent is in the local block map
+                        if bp_tree.contains(parent){
+                            bp_tree.insert_child(divider_key,block_id,parent);
+                        }
+                        //else
+                        else{
                         let divider_key_request = GeneralRequest::InsertOnRemoteParent(divider_key, block.parent(), id);
                         let peers = client.get_providers(block.parent().to_string()).await;
                         let divider_key_requests = peers.into_iter().map(|p| {
@@ -91,8 +93,7 @@ pub async fn insert(
                             async move { network_client.request(p, divider_key_request).await }.boxed()
                         });
 
-                        let info = futures::future::select_ok(divider_key_requests)
-                                                .await;
+                        let info = futures::future::select_ok(divider_key_requests).await;
                         match info{
                             Ok(str) => {
                                 let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
@@ -103,6 +104,7 @@ pub async fn insert(
                             },
                             Err(err) => println!("Error {:?}", err),
                         };
+                        }
 
                         let migrate_request = GeneralRequest::MigrateRequest(block);
                         migrating_block.insert(id);
@@ -112,9 +114,10 @@ pub async fn insert(
                         //request migration
                         match result {
                             Ok(_) => {
-                                
+                                //client.stop_providing(id); stop providing the migrated block
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
+
                                 if queries.contains_key(&id) {
                                     //if there are some queries that are needed to be flushed
                                     let pending_queries = queries.remove(&id).unwrap();

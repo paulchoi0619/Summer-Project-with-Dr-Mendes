@@ -114,25 +114,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                             
 
-                                            //ask Dr. Mendes
+                                            
                                             let mut copy_network_client = network_client.clone();
-                                            let handle =thread::spawn(move ||{
-                                               
-                                                let mut p = network_client_id;
-                                                for i in providers.iter(){
-                                                    p = *i;
-                                                }
-                                                    let entry = Entry::new(network_client_id,key);
-                                                    let default_id = Default::default();
-                                                    let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
-                                                    
-                                                    copy_network_client.request(p,lease);
-                                                    
-                                            });
-                                            let result = handle.join();
+                                            let mut p = network_client_id;
+                                            for i in providers.iter(){
+                                                p = *i;
+                                            }
+                                            let entry = Entry::new(network_client_id,key);
+                                            let default_id = Default::default();
+                                            let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
+                                            let result = copy_network_client.request(p,lease).await;
+                                                
                                             match result{
-                                                Ok(_)=>{
-
+                                                Ok(result)=>{
+                                                    println!("Done");
                                                 },
                                                 Err(_)=>{
                                                     println!("Error");
