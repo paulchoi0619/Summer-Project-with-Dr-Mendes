@@ -33,7 +33,6 @@ pub async fn handle_lease_request(
         }
     } else {
         let current_block = bp_tree.get_block(current_id); //returns either the leaf or the internal block of the local b-plus tree
-
         if current_block.is_leaf() {
             if key >= current_block.return_divider_key() {
                 //if the key does not belong in this leaf block
@@ -47,23 +46,7 @@ pub async fn handle_lease_request(
                     //flush the query in the next block
                 });
             } else {
-                
-            }
-        } else {
-            
-        }
-    }
-}
-pub async fn insert(
-    current_id:BlockId,
-    key: Key,
-    entry: Entry,
-    bp_tree: &mut BPTree,
-    client: &mut Client,
-    migrate_peer: &PeerId,
-    migrating_block: &mut HashSet<BlockId>,
-    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,){
-        let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
+                let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
                 match result {
                     InsertResult::Complete => {
                         //if the insertion is successful
@@ -138,20 +121,11 @@ pub async fn insert(
                         }
                     }
                 }
-}
-
-pub async fn send_insert_query(
-    current_id:BlockId,
-    key: Key,
-    entry: Entry,
-    bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
-    receiver: PeerId,
-    client: &mut Client,
-    migrate_peer: &PeerId,
-    migrating_block: &mut HashSet<BlockId>,
-    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,){
-        let providers = client.get_providers(current_id.to_string()).await;
+            }
+        } 
+        //the current peer does not contain the id
+        else {
+            let providers = client.get_providers(current_id.to_string()).await;
         if providers.is_empty() {
             println!("Could not find provider for lease.");
         }
@@ -165,18 +139,15 @@ pub async fn send_insert_query(
         match lease_info {
             Ok(str) => {
                 println!("Here {:?}", str.0);
-                // let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
-                // if let GeneralResponse::LeaseResponse(source) = response {
-                //     client
-                //         .respond(GeneralResponse::LeaseResponse(source), channel)
-                //         .await; //respond that the insertion is complete
-                // }
             }
             Err(err) => {
                 println!("Error {:?}", err);
             }
         };
+        }
     }
+}
+
 pub async fn handle_insert_on_remote_parent(
     key: Key,
     parent: BlockId,
@@ -272,47 +243,6 @@ pub async fn handle_insert_on_remote_parent(
                 }
             }
         }
-    }
-}
-
-pub async fn handle_parent_check(
-    bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
-    client: &mut Client,
-    parent: BlockId,
-    child_key: Key,
-) {
-    let block = bp_tree.get_block(parent);
-    if child_key < block.return_divider_key() {
-        let response = GeneralResponse::ConfirmParent(parent);
-        client.respond(response, channel).await;
-    } else {
-        let next_block_id = block.return_next_block();
-        let next_parent_check = GeneralRequest::ConfirmParent(child_key);
-        let next_provider = client.get_providers(next_block_id.to_string()).await;
-        let requests = next_provider.into_iter().map(|p| {
-            let mut network_client = client.clone();
-            let next_parent_check = next_parent_check.clone();
-            async move { network_client.request(p, next_parent_check).await }.boxed()
-        });
-        let insert_info = futures::future::select_ok(requests).await;
-        match insert_info {
-            Ok(str) => {
-                let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
-                match response {
-                    GeneralResponse::InsertOnRemoteParent(_) => {}
-                    GeneralResponse::MigrateResponse(_) => {}
-                    GeneralResponse::LeaseResponse(_) => {}
-                    GeneralResponse::ConfirmParent(parent) => {
-                        let response = GeneralResponse::ConfirmParent(parent);
-                        client.respond(response, channel).await;
-                    }
-                }
-            }
-            Err(err) => {
-                println!("Error {:?}", err);
-            }
-        };
     }
 }
 
