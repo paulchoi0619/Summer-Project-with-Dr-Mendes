@@ -10,7 +10,7 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc,Mutex};
+use std::sync::RwLock;
 use std::path::PathBuf;
 use std::thread;
 use tokio;
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
-    let mut bp_tree = BPTree::new(); //initialize bp_tree
+    let bp_tree = RwLock::new(BPTree::new()); //initialize bp_tree
     let mut is_root = false;
 
     let topic = Topic::new("size");
@@ -121,8 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 p = *i;
                                             }
                                             let entry = Entry::new(network_client_id,key);
-                                            let default_id = Default::default();
-                                            let lease = GeneralRequest::LeaseRequest(key,entry,default_id);
+                                            let lease = GeneralRequest::LeaseRequest(key,entry);
                                             let result = copy_network_client.request(p,lease).await;
                                                 
                                             match result{
@@ -154,6 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 let mut block = Block::new(); //initialize block
                                 block.set_block_id(); //initialize block id
                                 let top_id = block.return_id();
+                                let mut bp_tree = bp_tree.write().unwrap();
                                 bp_tree.add_block(top_id,block); //insert block in map
                                 bp_tree.set_top_id(top_id); //set the top idv
                                 network_client.boot_root().await;
@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         cmd if cmd.starts_with("migrate") => {
+                                let bp_tree = bp_tree.read().unwrap();
                                 let id = bp_tree.get_top_id();
                                 let block = bp_tree.get_block(id).clone();
                                 let migrate_request = GeneralRequest::MigrateRequest(block);
@@ -188,6 +189,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 None => {
                 },
                 Some(_) => {
+                    let bp_tree = bp_tree.read().unwrap();
                     let size = bp_tree.get_size();
                     network_client.publish(topic.clone(), size).await;
                 }
@@ -199,25 +201,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         match response{
 
-                            GeneralRequest::LeaseRequest(key,entry,block_id) => { //request response channel
-
-                                handle_lease_request(key, entry, &mut bp_tree, channel,network_client_id,&mut network_client,&migrate_peer,
+                            GeneralRequest::LeaseRequest(key,entry) => { //request response channel
+                                network_client.respond(GeneralResponse::LeaseResponse, channel).await; 
+                                handle_lease_request(key, entry, &bp_tree,&mut network_client,&migrate_peer,
                                 &mut migrating_block,&mut queries).await;
-
+                                let bp_tree = bp_tree.read().unwrap();
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                             GeneralRequest::MigrateRequest(block)=>{
-
-                                handle_migrate(block,&mut bp_tree,channel,&mut network_client,network_client_id).await;
-
+                                network_client.respond(GeneralResponse::MigrateResponse, channel).await;
+                                handle_migrate(block,&bp_tree,&mut network_client).await;
+                                let bp_tree = bp_tree.read().unwrap();
                                 println!("{:?}",bp_tree.get_block_map());
 
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
-                                
-                                handle_insert_on_remote_parent(divider_key, parent_id,child_id, &mut bp_tree, channel,
+                                network_client.respond(GeneralResponse::InsertOnRemoteParent, channel).await;
+                                handle_insert_on_remote_parent(divider_key, parent_id,child_id, &bp_tree,
                                 &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
-                                
+                                let bp_tree = bp_tree.read().unwrap();
                                 println!("{:?}",bp_tree.get_block_map());
                             }
                         }
@@ -226,7 +228,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         let source_id = message.source.unwrap();
                         let data = String::from_utf8_lossy(&message.data);
-                        println!("{:?}",data);
                         let peer_size:usize = serde_json::from_str(&data).unwrap();
                         if peer_size<cur_peer_size{
                             cur_peer_size = peer_size;
@@ -260,25 +261,18 @@ struct Opt {
     // argument: CliArgument,
 }
 
-// struct NodeState{
-//     bp_tree: &mut BPTree,
-//     channel: ResponseChannel<GenericResponse>,
-//     client: &mut Client,
-//     migrate_peer: PeerId,
-//     migrating_block: &mut HashSet<BlockId>,
-//     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
-// }
+
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralRequest {
-    LeaseRequest(Key, Entry, BlockId),
+    LeaseRequest(Key, Entry),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
 }
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralResponse {
-    LeaseResponse(PeerId),
-    MigrateResponse(PeerId),
-    InsertOnRemoteParent(BlockId),
+    LeaseResponse,
+    MigrateResponse,
+    InsertOnRemoteParent,
 }
 
 #[derive(Debug, Parser)]

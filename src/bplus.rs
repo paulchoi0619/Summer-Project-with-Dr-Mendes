@@ -40,7 +40,10 @@ impl BPTree {
     pub fn set_top_id(&mut self, id: BlockId) {
         self.top_id = id;
     }
-    pub fn get_block(&mut self, id: BlockId) -> &mut Block {
+    pub fn get_block(&self, id: BlockId) -> Block {
+        self.block_map.get(&id).unwrap().clone()
+    }
+    pub fn get_mut_block(&mut self, id: BlockId) -> &mut Block {
         self.block_map.get_mut(&id).unwrap()
     }
     pub fn find(&self, block_id: BlockId, k: Key) -> BlockId {
@@ -72,7 +75,7 @@ impl BPTree {
         child: BlockId,
         current_block: BlockId,
     ) -> InsertResult {
-        let current_block = self.get_block(current_block);
+        let current_block = self.get_mut_block(current_block);
         current_block.add_child(key, child);
         if current_block.keys.len() == SIZE {
             let mut new_block = current_block.clone(); //create new block to split and update block map
@@ -215,7 +218,6 @@ impl Block {
             leftblock.keys.pop();
             leftblock.values.pop();
         }
-        new_root.keys.push(rightblock.keys[0]);
         result.divider_key = rightblock.keys[0];
         leftblock.divider_key = result.divider_key; //sets the max range for leftblock
         block_map.insert(new_root.block_id, new_root); // add new root to block map

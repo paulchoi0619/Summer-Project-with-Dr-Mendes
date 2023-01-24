@@ -8,22 +8,20 @@ use std::collections::{HashMap, HashSet};
 pub async fn handle_lease_request(
     key: Key,
     entry: Entry,
-    bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
-    receiver: PeerId,
+    bp_tree: &RwLock<BPTree>,
     client: &mut Client,
     migrate_peer: &PeerId,
     migrating_block: &mut HashSet<BlockId>,
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
 ) {
-    // respond that it received the query since not responding leads to response omission error
-    client.respond(GeneralResponse::LeaseResponse(receiver), channel).await; 
-
+    let current_id = {
+    let bp_tree = bp_tree.read().unwrap();
     let top_id = bp_tree.get_top_id(); //the topmost block id of the local b-plus tree
-    let current_id = bp_tree.find(top_id, key); //read operation
+    bp_tree.find(top_id, key) //read operation
+    };
 
     if migrating_block.contains(&current_id) {
-        let request = GeneralRequest::LeaseRequest(key, entry, current_id);
+        let request = GeneralRequest::LeaseRequest(key, entry);
         if queries.contains_key(&current_id) {
             let requests = queries.get_mut(&current_id).unwrap();
             requests.push(request);
@@ -32,12 +30,16 @@ pub async fn handle_lease_request(
             queries.insert(current_id, requests);
         }
     } else {
-        let current_block = bp_tree.get_block(current_id); //returns either the leaf or the internal block of the local b-plus tree
+        
+        let current_block = {
+            let bp_tree = bp_tree.read().unwrap();
+            bp_tree.get_block(current_id)
+        }; //returns either the leaf or the internal block of the local b-plus tree
         if current_block.is_leaf() {
             if key >= current_block.return_divider_key() {
                 //if the key does not belong in this leaf block
                 let next_block_id = current_block.return_next_block();
-                let request = GeneralRequest::LeaseRequest(key, entry, next_block_id);
+                let request = GeneralRequest::LeaseRequest(key, entry);
                 let peers = client.get_providers(next_block_id.to_string()).await;
                 let _requests = peers.into_iter().map(|p| {
                     let mut network_client = client.clone();
@@ -46,6 +48,7 @@ pub async fn handle_lease_request(
                     //flush the query in the next block
                 });
             } else {
+                let mut bp_tree = bp_tree.write().unwrap();
                 let result = bp_tree.insert(current_id, key, entry); //if the block is a leaf then add the entry (write operation)
                 match result {
                     InsertResult::Complete => {
@@ -55,7 +58,7 @@ pub async fn handle_lease_request(
                     //if it led to a split
                     InsertResult::RightBlock(block_id,divider_key )=> {
                         let id = block_id;
-                        let mut block = bp_tree.get_block(id).clone();
+                        let block = bp_tree.get_block(id).clone();
                         let parent = block.parent();
                         client.start_providing(block_id.to_string()).await; //provide until migration is complete
 
@@ -79,11 +82,11 @@ pub async fn handle_lease_request(
                         let info = futures::future::select_ok(divider_key_requests).await;
                         match info{
                             Ok(str) => {
-                                let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
-                                if let GeneralResponse::InsertOnRemoteParent(parent)=response{
-                                    block.set_parent(parent);
+                                // let response:GeneralResponse= serde_json::from_str(&str.0).unwrap();
+                                // if let GeneralResponse::InsertOnRemoteParent(parent)=response{
+                                //     block.set_parent(parent);
 
-                                }
+                                // }
                             },
                             Err(err) => println!("Error {:?}", err),
                         };
@@ -126,10 +129,11 @@ pub async fn handle_lease_request(
         //the current peer does not contain the id
         else {
             let providers = client.get_providers(current_id.to_string()).await;
+        println!("{:?}",providers);
         if providers.is_empty() {
             println!("Could not find provider for lease.");
         }
-        let lease = GeneralRequest::LeaseRequest(key, entry, current_id); //send a lease request to the next peer
+        let lease = GeneralRequest::LeaseRequest(key, entry); //send a lease request to the next peer
         let requests = providers.into_iter().map(|p| {
             let mut network_client = client.clone();
             let lease = lease.clone();
@@ -152,14 +156,16 @@ pub async fn handle_insert_on_remote_parent(
     key: Key,
     parent: BlockId,
     child: BlockId,
-    bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
+    bp_tree: &RwLock<BPTree>,
     client: &mut Client,
     migrate_peer: PeerId,
     migrating_block: &mut HashSet<BlockId>,
     queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
 ) {
-    let parent_block = bp_tree.get_block(parent);
+    let parent_block = {
+        let bp_tree = bp_tree.read().unwrap();
+        bp_tree.get_block(parent)
+    }; 
     if key >= parent_block.return_divider_key() {
         //if the key does not belong to this parent block anymore
         let right_block = parent_block.return_next_block(); //adjacent block of the internal block
@@ -175,13 +181,10 @@ pub async fn handle_insert_on_remote_parent(
             Ok(str) => {
                 let response: GeneralResponse = serde_json::from_str(&str.0).unwrap();
                 match response {
-                    GeneralResponse::InsertOnRemoteParent(parent) => {
-                        client
-                            .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
-                            .await;
+                    GeneralResponse::InsertOnRemoteParent => {
                     }
-                    GeneralResponse::MigrateResponse(_) => {}
-                    GeneralResponse::LeaseResponse(_) => {}
+                    GeneralResponse::MigrateResponse => {}
+                    GeneralResponse::LeaseResponse => {}
                 }
             }
             Err(err) => {
@@ -189,13 +192,11 @@ pub async fn handle_insert_on_remote_parent(
             }
         };
     } else {
+        let mut bp_tree = bp_tree.write().unwrap();
         let result = bp_tree.insert_child(key, child, parent);
         match result {
             //Successful insertion
             InsertResult::Complete => {
-                client
-                    .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
-                    .await;
             }
             //Insertion led to split
             InsertResult::RightBlock(right_block_id,divider_key) => {
@@ -208,26 +209,11 @@ pub async fn handle_insert_on_remote_parent(
                     Ok(_) => {
                         bp_tree.remove_block(right_block_id); //remove block from local b-plus tree
                         migrating_block.remove(&right_block_id); //remove id from record set
-                        let left_block_range = bp_tree.get_block(parent).return_divider_key(); //getting the divider key of left block from the split
-                        if child < left_block_range {
-                            //if the child still belongs to the local block
-                            client
-                                .respond(GeneralResponse::InsertOnRemoteParent(parent), channel)
-                                .await;
-                        } else {
-                            //if it is located in the right block
-                            client
-                                .respond(
-                                    GeneralResponse::InsertOnRemoteParent(right_block_id),
-                                    channel,
-                                )
-                                .await;
-                        }
                         if queries.contains_key(&right_block_id) {
                             let pending_queries = queries.remove(&right_block_id).unwrap();
                             for query in pending_queries {
                                 let result = client.request(migrate_peer, query).await;
-                                match result {
+                                match result{
                                     Ok(str) => {}
                                     Err(err) => {
                                         println!("Error {:?}", err);
@@ -247,16 +233,12 @@ pub async fn handle_insert_on_remote_parent(
 
 pub async fn handle_migrate(
     block: Block,
-    bp_tree: &mut BPTree,
-    channel: ResponseChannel<GenericResponse>,
+    bp_tree: &RwLock<BPTree>,
     client: &mut Client,
-    new_provider: PeerId,
 ) {
     let child_id = block.return_id();
+    let mut bp_tree = bp_tree.write().unwrap();
     bp_tree.add_block(child_id, block);
     client.start_providing(child_id.to_string()).await;
-    client
-        .respond(GeneralResponse::MigrateResponse(new_provider), channel)
-        .await;
 
 }
