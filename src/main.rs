@@ -201,12 +201,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
                         let bp_tree = bp_tree.clone();
+                        let mut clone_client = network_client.clone();
+                        let migrating_block = migrating_block.clone();
+                        let queries = queries.clone();
                         match response{
                             GeneralRequest::LeaseRequest(key,entry) => { //request response channel
                                 network_client.respond(GeneralResponse::LeaseResponse, channel).await; 
-                                let mut clone_client = network_client.clone();
-                                let migrating_block = migrating_block.clone();
-                                let queries = queries.clone();
                                 thread::spawn(move ||{
                                     let rt = tokio::runtime::Runtime::new().unwrap();
                                     rt.block_on(handle_lease_request(key, entry, bp_tree,&mut clone_client,migrate_peer,
@@ -216,7 +216,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             GeneralRequest::MigrateRequest(block)=>{
                                 network_client.respond(GeneralResponse::MigrateResponse, channel).await;
-                                let mut clone_client = network_client.clone();
                                 thread::spawn(move||{
                                 let rt = tokio::runtime::Runtime::new().unwrap();
                                 rt.block_on(handle_migrate(block,bp_tree,&mut clone_client));
@@ -224,9 +223,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
                                 network_client.respond(GeneralResponse::InsertOnRemoteParent, channel).await;
-                                let mut clone_client = network_client.clone();
-                                let migrating_block = migrating_block.clone();
-                                let queries = queries.clone();
                                 thread::spawn(move||{
                                 let rt = tokio::runtime::Runtime::new().unwrap();
                                 rt.block_on(handle_insert_on_remote_parent(divider_key, parent_id,child_id, bp_tree,

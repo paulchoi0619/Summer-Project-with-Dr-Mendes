@@ -61,10 +61,7 @@ pub async fn handle_lease_request(
                         let id = block_id;
                         let block = bp_tree.get_block(id).clone();
                         let parent = block.parent();
-                        client.start_providing(block_id.to_string()).await; //provide until migration is complete
-
-
-                        //need to inform parent about the existence
+                        //client.start_providing(block_id.to_string()).await; //provide until migration is complete
 
                         //if the parent is in the local block map
                         if bp_tree.contains(parent){
@@ -102,7 +99,7 @@ pub async fn handle_lease_request(
                         //request migration
                         match result {
                             Ok(_) => {
-                                //client.stop_providing(id); stop providing the migrated block
+                                //client.stop_providing(id.to_string()).await; //stop providing the migrated block
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
                                 let q_records = queries.read().unwrap();
@@ -248,8 +245,9 @@ pub async fn handle_migrate(
     client: &mut Client,
 ) {
     let child_id = block.return_id();
-    let mut bp_tree = bp_tree.write().unwrap();
-    bp_tree.add_block(child_id, block);
+    let mut write_bp_tree = bp_tree.write().unwrap();
+    write_bp_tree.add_block(child_id, block);
     client.start_providing(child_id.to_string()).await;
+    let bp_tree = bp_tree.read().unwrap();
     println!("{:?}",bp_tree.get_block_map());
 }
