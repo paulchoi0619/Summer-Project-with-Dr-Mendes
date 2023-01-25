@@ -10,7 +10,7 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use std::sync::RwLock;
+use std::sync::{Arc,RwLock};
 use std::path::PathBuf;
 use std::thread;
 use tokio;
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .expect("Dial to succeed");
     }
 
-    let bp_tree = RwLock::new(BPTree::new()); //initialize bp_tree
+    let bp_tree = Arc::new(RwLock::new(BPTree::new())); //initialize bp_tree
     let mut is_root = false;
 
     let topic = Topic::new("size");
@@ -82,8 +82,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut cur_peer_size = f32::INFINITY as usize;
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
-    let mut migrating_block: HashSet<BlockId> = HashSet::new(); //keeping track of blocks that are in the progress of migration
-    let mut queries: HashMap<BlockId, Vec<GeneralRequest>> = HashMap::new(); //storing commands to send after migration is complete
+    let migrating_block: Arc<RwLock<HashSet<BlockId>>> =Arc::new(RwLock::new( HashSet::new())); //keeping track of blocks that are in the progress of migration
+    let queries: Arc<RwLock<HashMap<BlockId, Vec<GeneralRequest>>>> = Arc::new(RwLock::new(HashMap::new())); //storing commands to send after migration is complete
     
     loop {
 
@@ -198,29 +198,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
+                        
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
+                        let bp_tree = bp_tree.clone();
                         match response{
-
                             GeneralRequest::LeaseRequest(key,entry) => { //request response channel
                                 network_client.respond(GeneralResponse::LeaseResponse, channel).await; 
-                                handle_lease_request(key, entry, &bp_tree,&mut network_client,&migrate_peer,
-                                &mut migrating_block,&mut queries).await;
-                                let bp_tree = bp_tree.read().unwrap();
-                                println!("{:?}",bp_tree.get_block_map());
+                                let mut clone_client = network_client.clone();
+                                let migrating_block = migrating_block.clone();
+                                let queries = queries.clone();
+                                thread::spawn(move ||{
+                                    let rt = tokio::runtime::Runtime::new().unwrap();
+                                    rt.block_on(handle_lease_request(key, entry, bp_tree,&mut clone_client,migrate_peer,
+                                        migrating_block,queries));
+                                });
+                               
                             }
                             GeneralRequest::MigrateRequest(block)=>{
                                 network_client.respond(GeneralResponse::MigrateResponse, channel).await;
-                                handle_migrate(block,&bp_tree,&mut network_client).await;
-                                let bp_tree = bp_tree.read().unwrap();
-                                println!("{:?}",bp_tree.get_block_map());
-
+                                let mut clone_client = network_client.clone();
+                                thread::spawn(move||{
+                                let rt = tokio::runtime::Runtime::new().unwrap();
+                                rt.block_on(handle_migrate(block,bp_tree,&mut clone_client));
+                                });
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
                                 network_client.respond(GeneralResponse::InsertOnRemoteParent, channel).await;
-                                handle_insert_on_remote_parent(divider_key, parent_id,child_id, &bp_tree,
-                                &mut network_client,migrate_peer,&mut migrating_block,&mut queries).await;
-                                let bp_tree = bp_tree.read().unwrap();
-                                println!("{:?}",bp_tree.get_block_map());
+                                let mut clone_client = network_client.clone();
+                                let migrating_block = migrating_block.clone();
+                                let queries = queries.clone();
+                                thread::spawn(move||{
+                                let rt = tokio::runtime::Runtime::new().unwrap();
+                                rt.block_on(handle_insert_on_remote_parent(divider_key, parent_id,child_id, bp_tree,
+                                &mut clone_client,migrate_peer,migrating_block,queries));
+                                });
                             }
                         }
                     },

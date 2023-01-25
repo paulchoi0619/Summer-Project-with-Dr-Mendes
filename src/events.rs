@@ -8,20 +8,21 @@ use std::collections::{HashMap, HashSet};
 pub async fn handle_lease_request(
     key: Key,
     entry: Entry,
-    bp_tree: &RwLock<BPTree>,
+    bp_tree: Arc<RwLock<BPTree>>,
     client: &mut Client,
-    migrate_peer: &PeerId,
-    migrating_block: &mut HashSet<BlockId>,
-    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
+    migrate_peer: PeerId,
+    migrating_block: Arc<RwLock<HashSet<BlockId>>>,
+    queries:  Arc<RwLock<HashMap<BlockId, Vec<GeneralRequest>>>>,
 ) {
     let current_id = {
     let bp_tree = bp_tree.read().unwrap();
     let top_id = bp_tree.get_top_id(); //the topmost block id of the local b-plus tree
     bp_tree.find(top_id, key) //read operation
     };
-
-    if migrating_block.contains(&current_id) {
+    let read_migrating_block = migrating_block.read().unwrap();
+    if read_migrating_block.contains(&current_id) {
         let request = GeneralRequest::LeaseRequest(key, entry);
+        let mut queries = queries.write().unwrap();
         if queries.contains_key(&current_id) {
             let requests = queries.get_mut(&current_id).unwrap();
             requests.push(request);
@@ -93,9 +94,10 @@ pub async fn handle_lease_request(
                         }
 
                         let migrate_request = GeneralRequest::MigrateRequest(block);
+                        let mut migrating_block = migrating_block.write().unwrap();
                         migrating_block.insert(id);
 
-                        let result = client.request(*migrate_peer, migrate_request).await;
+                        let result = client.request(migrate_peer, migrate_request).await;
 
                         //request migration
                         match result {
@@ -103,12 +105,13 @@ pub async fn handle_lease_request(
                                 //client.stop_providing(id); stop providing the migrated block
                                 bp_tree.remove_block(id); //remove block from local b-plus tree
                                 migrating_block.remove(&id); //remove id from record set
-
-                                if queries.contains_key(&id) {
+                                let q_records = queries.read().unwrap();
+                                if q_records.contains_key(&id) {
                                     //if there are some queries that are needed to be flushed
+                                    let mut queries = queries.write().unwrap();
                                     let pending_queries = queries.remove(&id).unwrap();
                                     for query in pending_queries {
-                                        let result = client.request(*migrate_peer, query).await;
+                                        let result = client.request(migrate_peer, query).await;
                                         match result {
                                             Ok(str) => {}
                                             Err(err) => {
@@ -148,19 +151,22 @@ pub async fn handle_lease_request(
                 println!("Error {:?}", err);
             }
         };
+
         }
     }
+    let bp_tree = bp_tree.read().unwrap();
+    println!("{:?}",bp_tree.get_block_map());
 }
 
 pub async fn handle_insert_on_remote_parent(
     key: Key,
     parent: BlockId,
     child: BlockId,
-    bp_tree: &RwLock<BPTree>,
+    bp_tree: Arc<RwLock<BPTree>>,
     client: &mut Client,
     migrate_peer: PeerId,
-    migrating_block: &mut HashSet<BlockId>,
-    queries: &mut HashMap<BlockId, Vec<GeneralRequest>>,
+    migrating_block: Arc<RwLock<HashSet<BlockId>>>,
+    queries: Arc<RwLock<HashMap<BlockId, Vec<GeneralRequest>>>>,
 ) {
     let parent_block = {
         let bp_tree = bp_tree.read().unwrap();
@@ -203,13 +209,16 @@ pub async fn handle_insert_on_remote_parent(
                 //right block to split
                 let block = bp_tree.get_block(right_block_id).clone();
                 let migrate_request = GeneralRequest::MigrateRequest(block);
+                let mut migrating_block = migrating_block.write().unwrap();
                 migrating_block.insert(right_block_id);
                 let result = client.request(migrate_peer, migrate_request).await; //request migration
                 match result {
                     Ok(_) => {
                         bp_tree.remove_block(right_block_id); //remove block from local b-plus tree
                         migrating_block.remove(&right_block_id); //remove id from record set
-                        if queries.contains_key(&right_block_id) {
+                        let q_records = queries.read().unwrap();
+                        if q_records.contains_key(&right_block_id) {
+                            let mut queries = queries.write().unwrap();
                             let pending_queries = queries.remove(&right_block_id).unwrap();
                             for query in pending_queries {
                                 let result = client.request(migrate_peer, query).await;
@@ -229,16 +238,18 @@ pub async fn handle_insert_on_remote_parent(
             }
         }
     }
+    let bp_tree = bp_tree.read().unwrap();
+    println!("{:?}",bp_tree.get_block_map());
 }
 
 pub async fn handle_migrate(
     block: Block,
-    bp_tree: &RwLock<BPTree>,
+    bp_tree: Arc<RwLock<BPTree>>,
     client: &mut Client,
 ) {
     let child_id = block.return_id();
     let mut bp_tree = bp_tree.write().unwrap();
     bp_tree.add_block(child_id, block);
     client.start_providing(child_id.to_string()).await;
-
+    println!("{:?}",bp_tree.get_block_map());
 }
