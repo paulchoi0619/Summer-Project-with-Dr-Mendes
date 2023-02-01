@@ -10,8 +10,8 @@ use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc,RwLock};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use tokio;
 use tokio::io::AsyncBufReadExt;
@@ -82,11 +82,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut cur_peer_size = f32::INFINITY as usize;
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
 
-    let migrating_block: Arc<RwLock<HashSet<BlockId>>> =Arc::new(RwLock::new( HashSet::new())); //keeping track of blocks that are in the progress of migration
-    let queries: Arc<RwLock<HashMap<BlockId, Vec<GeneralRequest>>>> = Arc::new(RwLock::new(HashMap::new())); //storing commands to send after migration is complete
-    
-    loop {
+    let migrating_block: Arc<RwLock<HashSet<BlockId>>> = Arc::new(RwLock::new(HashSet::new())); //keeping track of blocks that are in the progress of migration
+    let queries: Arc<RwLock<HashMap<BlockId, Vec<GeneralRequest>>>> =
+        Arc::new(RwLock::new(HashMap::new())); //storing commands to send after migration is complete
 
+    loop {
         tokio::select! {
             line_option = stdin.next_line() =>
             match line_option {
@@ -106,24 +106,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         let input = line.parse::<u64>();
                                         match input{
                                             Ok(key) =>{
-
-                                                
+                                                let entry = Entry::new(network_client_id,key);
+                                                if is_root{ //it is the provider of the root
+                                                    let read_top_id = bp_tree.read().unwrap();
+                                                    let top_id = read_top_id.get_top_id();
+                                                    let bp_tree = bp_tree.clone();
+                                                    let migrating_block = migrating_block.clone();
+                                                    let queries = queries.clone();
+                                                    let mut clone_client = network_client.clone();
+                                                    thread::spawn(move ||{
+                                                        let rt = tokio::runtime::Runtime::new().unwrap();
+                                                        rt.block_on( handle_lease_request(key,entry,bp_tree,&mut clone_client,migrate_peer,migrating_block,queries,top_id));
+                                                    });
+                                                }   
+                                                else{
                                                 let providers = network_client.get_providers("root".to_string()).await;
                                                 if providers.is_empty() {
                                                     return Err(format!("Could not find provider for leases.").into());
                                                 }
-                                            
 
-                                            
+
+
                                             let mut copy_network_client = network_client.clone();
                                             let mut p = network_client_id;
                                             for i in providers.iter(){
                                                 p = *i;
                                             }
-                                            let entry = Entry::new(network_client_id,key);
-                                            let lease = GeneralRequest::LeaseRequest(key,entry);
+                                            let id = Default::default();
+                                            let lease = GeneralRequest::LeaseRequest(key,entry,id);
                                             let result = copy_network_client.request(p,lease).await;
-                                                
+
                                             match result{
                                                 Ok(result)=>{
                                                     println!("Done");
@@ -133,11 +145,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                 }
                                             }
                                             }
-
+                                        }
 
                                             Err(_) =>{
                                                 println!("Incorrect Key")
                                             }
+
+
                                         }
 
                                         }
@@ -153,9 +167,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 let mut block = Block::new(); //initialize block
                                 block.set_block_id(); //initialize block id
                                 let top_id = block.return_id();
+                                let bp_tree = bp_tree.clone();
                                 let mut bp_tree = bp_tree.write().unwrap();
                                 bp_tree.add_block(top_id,block); //insert block in map
-                                bp_tree.set_top_id(top_id); //set the top idv
+                                bp_tree.set_top_id(top_id); //set the top id
                                 network_client.boot_root().await;
                                 network_client.subscribe(topic.clone()).await; //subscribe to gossipsub topic
                                 is_root = true;
@@ -189,8 +204,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 None => {
                 },
                 Some(_) => {
-                    let bp_tree = bp_tree.read().unwrap();
-                    let size = bp_tree.get_size();
+                   
+                    let tree_size = bp_tree.read().unwrap();
+                    let size = tree_size.get_size();
                     network_client.publish(topic.clone(), size).await;
                 }
             },
@@ -198,34 +214,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     None => {
                     },
                     Some(network::Event::InboundRequest {request, channel }) => {
-                        
+
                         let response:GeneralRequest= serde_json::from_str(&request).unwrap();
-                        let bp_tree = bp_tree.clone();
+                        let copy_bp_tree = bp_tree.clone();
                         let mut clone_client = network_client.clone();
                         let migrating_block = migrating_block.clone();
                         let queries = queries.clone();
                         match response{
-                            GeneralRequest::LeaseRequest(key,entry) => { //request response channel
-                                network_client.respond(GeneralResponse::LeaseResponse, channel).await; 
+                            GeneralRequest::LeaseRequest(key,entry,block_id) => { //request response channel
+                                let mut current_id = block_id;
+                                if (is_root){
+                                    let read_id = bp_tree.read().unwrap();
+                                    current_id = read_id.get_top_id();
+                                }
                                 thread::spawn(move ||{
                                     let rt = tokio::runtime::Runtime::new().unwrap();
-                                    rt.block_on(handle_lease_request(key, entry, bp_tree,&mut clone_client,migrate_peer,
-                                        migrating_block,queries));
+                                    rt.block_on(clone_client.respond(GeneralResponse::LeaseResponse, channel));
+                                    rt.block_on(handle_lease_request(key, entry, copy_bp_tree,&mut clone_client,migrate_peer,
+                                        migrating_block,queries,current_id));
                                 });
-                               
+
                             }
                             GeneralRequest::MigrateRequest(block)=>{
-                                network_client.respond(GeneralResponse::MigrateResponse, channel).await;
                                 thread::spawn(move||{
                                 let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(handle_migrate(block,bp_tree,&mut clone_client));
+                                rt.block_on(clone_client.respond(GeneralResponse::MigrateResponse, channel));
+                                rt.block_on(handle_migrate(block,copy_bp_tree,&mut clone_client));
                                 });
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
-                                network_client.respond(GeneralResponse::InsertOnRemoteParent, channel).await;
                                 thread::spawn(move||{
                                 let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(handle_insert_on_remote_parent(divider_key, parent_id,child_id, bp_tree,
+                                rt.block_on(clone_client.respond(GeneralResponse::InsertOnRemoteParent, channel));
+                                rt.block_on(handle_insert_on_remote_parent(divider_key, parent_id,child_id, copy_bp_tree,
                                 &mut clone_client,migrate_peer,migrating_block,queries));
                                 });
                             }
@@ -268,10 +289,9 @@ struct Opt {
     // argument: CliArgument,
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum GeneralRequest {
-    LeaseRequest(Key, Entry),
+    LeaseRequest(Key, Entry,BlockId),
     MigrateRequest(Block),
     InsertOnRemoteParent(Key, BlockId, BlockId),
 }

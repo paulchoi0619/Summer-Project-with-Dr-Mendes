@@ -19,7 +19,7 @@ impl BPTree {
             top_id: Default::default(),
         }
     }
-    pub fn contains(&self, id:BlockId) -> bool{
+    pub fn contains(&self, id: BlockId) -> bool {
         self.block_map.contains_key(&id)
     }
     pub fn get_size(&self) -> usize {
@@ -80,7 +80,7 @@ impl BPTree {
         if current_block.keys.len() == SIZE {
             let mut new_block = current_block.clone(); //create new block to split and update block map
             let result = new_block.split_internal_block(&mut self.block_map);
-            return InsertResult::RightBlock(result.right,result.divider_key);
+            return InsertResult::RightBlock(result.right, result.divider_key);
         } else {
             return InsertResult::Complete;
         }
@@ -99,14 +99,14 @@ impl BPTree {
                     .get_mut(&result.left)
                     .unwrap()
                     .set_next_block(result.right); //create a link between left and right nodes
-                return InsertResult::RightBlock(result.right,result.divider_key);
+                return InsertResult::RightBlock(result.right, result.divider_key);
             }
             let result = newleaf.split_leaf_block(&mut self.block_map); //splits the block and adds them to the block map
             self.block_map
                 .get_mut(&result.left)
                 .unwrap()
                 .set_next_block(result.right); //create a link between left and right nodes
-            return InsertResult::RightBlock(result.right,result.divider_key);
+            return InsertResult::RightBlock(result.right, result.divider_key);
         }
         return InsertResult::Complete;
     }
@@ -279,7 +279,7 @@ impl Block {
 
 pub enum InsertResult {
     Complete,
-    RightBlock(BlockId,Key),
+    RightBlock(BlockId, Key),
 }
 
 pub struct SplitResult {
