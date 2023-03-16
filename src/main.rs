@@ -227,27 +227,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     let read_id = bp_tree.read().unwrap();
                                     current_id = read_id.get_top_id();
                                 }
-                                thread::spawn(move ||{
-                                    let rt = tokio::runtime::Runtime::new().unwrap();
-                                    rt.block_on(clone_client.respond(GeneralResponse::LeaseResponse, channel));
-                                    rt.block_on(handle_lease_request(key, entry, copy_bp_tree,&mut clone_client,migrate_peer,
-                                        migrating_block,queries,current_id));
+                                tokio::spawn(async move ||{
+                                    clone_client.respond(GeneralResponse::LeaseResponse, channel).await;
+                                    handle_lease_request(key, entry, copy_bp_tree,&mut clone_client,migrate_peer,
+                                        migrating_block,queries,current_id).await;
                                 });
 
                             }
                             GeneralRequest::MigrateRequest(block)=>{
-                                thread::spawn(move||{
-                                let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(clone_client.respond(GeneralResponse::MigrateResponse, channel));
-                                rt.block_on(handle_migrate(block,copy_bp_tree,&mut clone_client));
+                                tokio::spawn(async move||{ //get shared reference
+                                clone_client.respond(GeneralResponse::MigrateResponse, channel).await;
+                                handle_migrate(block,copy_bp_tree,&mut clone_client).await;
                                 });
                             }
                             GeneralRequest::InsertOnRemoteParent(divider_key,parent_id,child_id) =>{
-                                thread::spawn(move||{
-                                let rt = tokio::runtime::Runtime::new().unwrap();
-                                rt.block_on(clone_client.respond(GeneralResponse::InsertOnRemoteParent, channel));
-                                rt.block_on(handle_insert_on_remote_parent(divider_key, parent_id,child_id, copy_bp_tree,
-                                &mut clone_client,migrate_peer,migrating_block,queries));
+                                tokio::spawn(async move||{
+                                clone_client.respond(GeneralResponse::InsertOnRemoteParent, channel).await;
+                                handle_insert_on_remote_parent(divider_key, parent_id,child_id, copy_bp_tree,
+                                &mut clone_client,migrate_peer,migrating_block,queries).await;
                                 });
                             }
                         }
